@@ -24,6 +24,8 @@ from data.models.ai_config import AIModelConfig
 from data.repositories.ai_config_repository import AIModelConfigRepository
 from app.common.logger import set_level, set_backup_count, get_log_dir
 from app.common.log_config import log_config_manager
+from app.common.storage_config import storage_config_manager
+from data.database import persistent_db
 
 
 class ModelConfigDialog(MessageBoxBase):
@@ -291,6 +293,9 @@ class AISettingsInterface(ScrollArea):
         # 日志配置区域
         self._initLogConfigUI()
 
+        # 存储配置区域
+        self._initStorageConfigUI()
+
         # 布局
         self.vBoxLayout.setSpacing(20)
         self.vBoxLayout.setContentsMargins(36, 20, 36, 36)
@@ -301,6 +306,7 @@ class AISettingsInterface(ScrollArea):
         self.vBoxLayout.addWidget(self.addBtn)
         self.vBoxLayout.addWidget(self.configContainer)
         self.vBoxLayout.addWidget(self.logConfigCard)
+        self.vBoxLayout.addWidget(self.storageConfigCard)
         self.vBoxLayout.addStretch()
 
         # 滚动设置
@@ -385,6 +391,87 @@ class AISettingsInterface(ScrollArea):
                 title="提示",
                 content="日志目录尚不存在",
                 parent=self
+            )
+
+    def _initStorageConfigUI(self):
+        """初始化存储配置 UI"""
+        self.storageConfigCard = CardWidget(self)
+        layout = QVBoxLayout(self.storageConfigCard)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(16)
+
+        # 标题
+        titleLabel = SubtitleLabel("数据存储", self)
+        layout.addWidget(titleLabel)
+
+        # 数据库路径显示
+        pathLayout = QHBoxLayout()
+        pathLayout.addWidget(BodyLabel("数据位置:"))
+
+        self.dataPathLabel = BodyLabel(str(storage_config_manager.get_config().effective_data_dir), self)
+        self.dataPathLabel.setStyleSheet("color: #666;")
+        pathLayout.addWidget(self.dataPathLabel, 1)
+        layout.addLayout(pathLayout)
+
+        # 按钮行
+        btnLayout = QHBoxLayout()
+
+        # 打开数据目录
+        openDataBtn = PushButton(FIF.FOLDER, "打开数据目录", self)
+        openDataBtn.clicked.connect(self._onOpenDataDir)
+        btnLayout.addWidget(openDataBtn)
+
+        # 更改存储位置
+        changePathBtn = PushButton(FIF.EDIT, "更改位置", self)
+        changePathBtn.clicked.connect(self._onChangeDataPath)
+        btnLayout.addWidget(changePathBtn)
+
+        btnLayout.addStretch()
+        layout.addLayout(btnLayout)
+
+        # 提示
+        tipLabel = BodyLabel("提示: 更改存储位置后需要重启应用", self)
+        tipLabel.setStyleSheet("color: #999; font-size: 11px;")
+        layout.addWidget(tipLabel)
+
+    def _onOpenDataDir(self):
+        """打开数据目录"""
+        import os
+        import subprocess
+
+        data_dir = storage_config_manager.get_config().effective_data_dir
+        if data_dir.exists():
+            if os.name == 'nt':  # Windows
+                os.startfile(str(data_dir))
+            else:  # macOS / Linux
+                subprocess.run(['xdg-open', str(data_dir)])
+        else:
+            # 创建目录
+            data_dir.mkdir(parents=True, exist_ok=True)
+            if os.name == 'nt':
+                os.startfile(str(data_dir))
+            else:
+                subprocess.run(['xdg-open', str(data_dir)])
+
+    def _onChangeDataPath(self):
+        """更改数据存储位置"""
+        from PySide6.QtWidgets import QFileDialog
+
+        current_dir = storage_config_manager.get_config().effective_data_dir
+        new_dir = QFileDialog.getExistingDirectory(
+            self,
+            "选择数据存储位置",
+            str(current_dir),
+        )
+
+        if new_dir:
+            storage_config_manager.set_data_dir(new_dir)
+            self.dataPathLabel.setText(new_dir)
+            InfoBar.success(
+                title="已更新",
+                content=f"数据存储位置已更改为 {new_dir}\n请重启应用以生效",
+                parent=self,
+                duration=5000
             )
 
     def _loadConfigs(self):

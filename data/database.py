@@ -1,11 +1,17 @@
 """
 SQLite 数据库连接管理
+
+双数据库架构：
+- PersistentDB: 持久化数据库（文件），存储用户配置和聊天记录
+- TempDB: 临时数据库（内存），存储员工组织数据
 """
 import sqlite3
 from typing import Optional
 from contextlib import contextmanager
+from pathlib import Path
 
-from app.common.logger import get_logger
+from app.common.logger import get_logger, logger
+from app.common.storage_config import storage_config_manager
 
 logger = get_logger()
 
@@ -13,7 +19,7 @@ logger = get_logger()
 class Database:
     """SQLite 数据库连接管理器 - 单例模式"""
 
-    _instance: Optional['Database'] = None
+    _instance: Optional["Database"] = None
 
     def __new__(cls):
         if cls._instance is None:
@@ -25,29 +31,28 @@ class Database:
         if self._initialized:
             return
 
-        self.db_path = ":memory:"
         self._connection: Optional[sqlite3.Connection] = None
         self._initialized = True
 
     @property
     def connection(self) -> sqlite3.Connection:
-        """获取数据库连接"""
+        """获取临时数据库连接（内存数据库）"""
         if self._connection is None:
-            logger.debug("创建数据库连接", extra={"db_path": self.db_path})
-            self._connection = sqlite3.connect(self.db_path, check_same_thread=False)
+            logger.debug("创建临时数据库连接", extra={"db_type": "memory"})
+            self._connection = sqlite3.connect(":memory:", check_same_thread=False)
             self._connection.row_factory = sqlite3.Row
-            self._enable_foreign_keys()
-            self._init_schema()
-            logger.info("数据库初始化完成")
+            self._enable_foreign_keys(self._connection)
+            self._init_temp_schema(self._connection)
+            logger.info("临时数据库初始化完成")
         return self._connection
 
-    def _enable_foreign_keys(self):
+    def _enable_foreign_keys(self, conn: sqlite3.Connection):
         """启用外键约束"""
-        self.connection.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA foreign_keys = ON")
 
-    def _init_schema(self):
-        """初始化数据库表结构"""
-        self.connection.executescript("""
+    def _init_temp_schema(self, conn: sqlite3.Connection):
+        """初始化临时数据库表结构（员工组织数据）"""
+        conn.executescript("""
             CREATE TABLE IF NOT EXISTS department (
                 id INTEGER PRIMARY KEY,
                 parent_id INTEGER,
@@ -68,6 +73,85 @@ class Database:
                 category TEXT
             );
 
+            CREATE INDEX IF NOT EXISTS idx_department_parent ON department(parent_id);
+            CREATE INDEX IF NOT EXISTS idx_employee_dept ON employee(department_level3);
+        """)
+        conn.commit()
+
+    @contextmanager
+    def transaction(self):
+        """事务上下文管理器"""
+        conn = self.connection
+        try:
+            yield conn
+            conn.commit()
+        except Exception as e:
+            logger.error("事务失败，执行回滚", extra={"error": str(e)})
+            conn.rollback()
+            raise
+
+    def close(self):
+        """关闭连接"""
+        if self._connection:
+            self._connection.close()
+            self._connection = None
+            logger.debug("临时数据库连接已关闭")
+
+    def clear(self):
+        """清空临时数据"""
+        logger.info("清空临时数据库数据")
+        self.connection.execute("DELETE FROM employee")
+        self.connection.execute("DELETE FROM department")
+        self.connection.commit()
+
+
+class PersistentDatabase:
+    """持久化数据库连接管理器 - 单例模式"""
+
+    _instance: Optional["PersistentDatabase"] = None
+
+    def __new__(cls):
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+            cls._instance._initialized = False
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+
+        self._connection: Optional[sqlite3.Connection] = None
+        self._db_path: Optional[Path] = None
+        self._initialized = True
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        """获取持久化数据库连接"""
+        db_path = storage_config_manager.get_database_path()
+
+        # 如果路径改变或连接不存在，重新创建连接
+        if self._connection is None or self._db_path != db_path:
+            if self._connection:
+                self._connection.close()
+
+            logger.debug("创建持久化数据库连接", extra={"db_path": str(db_path)})
+            storage_config_manager.ensure_data_dir()
+            self._connection = sqlite3.connect(str(db_path), check_same_thread=False)
+            self._connection.row_factory = sqlite3.Row
+            self._enable_foreign_keys(self._connection)
+            self._init_persistent_schema(self._connection)
+            self._db_path = db_path
+            logger.info("持久化数据库初始化完成", extra={"db_path": str(db_path)})
+
+        return self._connection
+
+    def _enable_foreign_keys(self, conn: sqlite3.Connection):
+        """启用外键约束"""
+        conn.execute("PRAGMA foreign_keys = ON")
+
+    def _init_persistent_schema(self, conn: sqlite3.Connection):
+        """初始化持久化数据库表结构（用户配置和聊天记录）"""
+        conn.executescript("""
             CREATE TABLE IF NOT EXISTS ai_model_config (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
@@ -134,13 +218,11 @@ class Database:
                 FOREIGN KEY (model_config_id) REFERENCES ai_model_config(id)
             );
 
-            CREATE INDEX IF NOT EXISTS idx_department_parent ON department(parent_id);
-            CREATE INDEX IF NOT EXISTS idx_employee_dept ON employee(department_level3);
             CREATE INDEX IF NOT EXISTS idx_chat_message_session ON chat_message(session_id);
             CREATE INDEX IF NOT EXISTS idx_group_chat_participant_session ON group_chat_participant(session_id);
             CREATE INDEX IF NOT EXISTS idx_group_chat_message_session ON group_chat_message(session_id);
         """)
-        self.connection.commit()
+        conn.commit()
 
     @contextmanager
     def transaction(self):
@@ -150,7 +232,7 @@ class Database:
             yield conn
             conn.commit()
         except Exception as e:
-            logger.error("事务失败，执行回滚", extra={"error": str(e)})
+            logger.error("持久化事务失败，执行回滚", extra={"error": str(e)})
             conn.rollback()
             raise
 
@@ -159,22 +241,29 @@ class Database:
         if self._connection:
             self._connection.close()
             self._connection = None
-            logger.debug("数据库连接已关闭")
+            self._db_path = None
+            logger.debug("持久化数据库连接已关闭")
 
     def clear(self):
-        """清空所有数据"""
-        logger.info("清空数据库数据")
+        """清空持久化数据（谨慎使用）"""
+        logger.warning("清空持久化数据库数据")
         # 按外键依赖顺序删除（先删除依赖表）
         self.connection.execute("DELETE FROM group_chat_message")
         self.connection.execute("DELETE FROM group_chat_participant")
         self.connection.execute("DELETE FROM group_chat_session")
         self.connection.execute("DELETE FROM chat_message")
         self.connection.execute("DELETE FROM chat_session")
-        self.connection.execute("DELETE FROM employee")
-        self.connection.execute("DELETE FROM department")
         self.connection.execute("DELETE FROM ai_model_config")
         self.connection.commit()
 
+    def get_db_path(self) -> Path:
+        """获取数据库文件路径"""
+        return storage_config_manager.get_database_path()
+
 
 # 全局实例
+# db - 临时数据库（员工组织数据）
 db = Database()
+
+# persistent_db - 持久化数据库（用户配置和聊天记录）
+persistent_db = PersistentDatabase()

@@ -4,7 +4,7 @@
 import json
 from typing import List, Optional
 
-from ..database import db
+from ..database import persistent_db
 from ..models.group_chat import GroupChatSession, GroupChatParticipant, GroupChatMessage
 
 
@@ -13,14 +13,14 @@ class GroupChatSessionRepository:
 
     def find_all(self, limit: int = 50) -> List[GroupChatSession]:
         """获取所有群聊会话"""
-        cursor = db.connection.execute(
+        cursor = persistent_db.connection.execute(
             "SELECT * FROM group_chat_session ORDER BY updated_at DESC LIMIT ?", (limit,)
         )
         return [GroupChatSession.from_row(row) for row in cursor.fetchall()]
 
     def find_by_id(self, id: int) -> Optional[GroupChatSession]:
         """根据 ID 查找"""
-        cursor = db.connection.execute(
+        cursor = persistent_db.connection.execute(
             "SELECT * FROM group_chat_session WHERE id = ?", (id,)
         )
         row = cursor.fetchone()
@@ -29,7 +29,7 @@ class GroupChatSessionRepository:
     def save(self, session: GroupChatSession) -> GroupChatSession:
         """保存群聊会话"""
         if session.id is None:
-            cursor = db.connection.execute(
+            cursor = persistent_db.connection.execute(
                 """
                 INSERT INTO group_chat_session (title, max_discussion_rounds)
                 VALUES (?, ?)
@@ -38,7 +38,7 @@ class GroupChatSessionRepository:
             )
             session.id = cursor.lastrowid
         else:
-            db.connection.execute(
+            persistent_db.connection.execute(
                 """
                 UPDATE group_chat_session SET title=?, max_discussion_rounds=?,
                     updated_at=CURRENT_TIMESTAMP
@@ -46,29 +46,29 @@ class GroupChatSessionRepository:
                 """,
                 (session.title, session.max_discussion_rounds, session.id)
             )
-        db.connection.commit()
+        persistent_db.connection.commit()
         return session
 
     def delete(self, id: int) -> bool:
         """删除群聊会话"""
-        cursor = db.connection.execute(
+        cursor = persistent_db.connection.execute(
             "DELETE FROM group_chat_session WHERE id = ?", (id,)
         )
-        db.connection.commit()
+        persistent_db.connection.commit()
         return cursor.rowcount > 0
 
     def update_title(self, id: int, title: str) -> bool:
         """更新会话标题"""
-        cursor = db.connection.execute(
+        cursor = persistent_db.connection.execute(
             "UPDATE group_chat_session SET title=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
             (title, id)
         )
-        db.connection.commit()
+        persistent_db.connection.commit()
         return cursor.rowcount > 0
 
     def count(self) -> int:
         """统计会话数量"""
-        cursor = db.connection.execute("SELECT COUNT(*) FROM group_chat_session")
+        cursor = persistent_db.connection.execute("SELECT COUNT(*) FROM group_chat_session")
         return cursor.fetchone()[0]
 
 
@@ -77,7 +77,7 @@ class GroupChatParticipantRepository:
 
     def find_by_session(self, session_id: int) -> List[GroupChatParticipant]:
         """获取会话的所有参与者"""
-        cursor = db.connection.execute(
+        cursor = persistent_db.connection.execute(
             "SELECT * FROM group_chat_participant WHERE session_id = ? ORDER BY joined_at ASC",
             (session_id,)
         )
@@ -85,7 +85,7 @@ class GroupChatParticipantRepository:
 
     def find_by_id(self, id: int) -> Optional[GroupChatParticipant]:
         """根据 ID 查找"""
-        cursor = db.connection.execute(
+        cursor = persistent_db.connection.execute(
             "SELECT * FROM group_chat_participant WHERE id = ?", (id,)
         )
         row = cursor.fetchone()
@@ -93,7 +93,7 @@ class GroupChatParticipantRepository:
 
     def find_by_session_and_model(self, session_id: int, model_config_id: int) -> Optional[GroupChatParticipant]:
         """根据会话和模型查找参与者"""
-        cursor = db.connection.execute(
+        cursor = persistent_db.connection.execute(
             "SELECT * FROM group_chat_participant WHERE session_id = ? AND model_config_id = ?",
             (session_id, model_config_id)
         )
@@ -103,7 +103,7 @@ class GroupChatParticipantRepository:
     def save(self, participant: GroupChatParticipant) -> GroupChatParticipant:
         """保存参与者"""
         if participant.id is None:
-            cursor = db.connection.execute(
+            cursor = persistent_db.connection.execute(
                 """
                 INSERT INTO group_chat_participant (session_id, model_config_id, nickname, role_description)
                 VALUES (?, ?, ?, ?)
@@ -113,40 +113,40 @@ class GroupChatParticipantRepository:
             )
             participant.id = cursor.lastrowid
             # 更新会话时间
-            db.connection.execute(
+            persistent_db.connection.execute(
                 "UPDATE group_chat_session SET updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 (participant.session_id,)
             )
         else:
-            db.connection.execute(
+            persistent_db.connection.execute(
                 """
                 UPDATE group_chat_participant SET nickname=?, role_description=?
                 WHERE id=?
                 """,
                 (participant.nickname, participant.role_description, participant.id)
             )
-        db.connection.commit()
+        persistent_db.connection.commit()
         return participant
 
     def delete(self, id: int) -> bool:
         """删除参与者"""
-        cursor = db.connection.execute(
+        cursor = persistent_db.connection.execute(
             "DELETE FROM group_chat_participant WHERE id = ?", (id,)
         )
-        db.connection.commit()
+        persistent_db.connection.commit()
         return cursor.rowcount > 0
 
     def delete_by_session(self, session_id: int) -> int:
         """删除会话的所有参与者"""
-        cursor = db.connection.execute(
+        cursor = persistent_db.connection.execute(
             "DELETE FROM group_chat_participant WHERE session_id = ?", (session_id,)
         )
-        db.connection.commit()
+        persistent_db.connection.commit()
         return cursor.rowcount
 
     def count_by_session(self, session_id: int) -> int:
         """统计会话参与者数量"""
-        cursor = db.connection.execute(
+        cursor = persistent_db.connection.execute(
             "SELECT COUNT(*) FROM group_chat_participant WHERE session_id = ?", (session_id,)
         )
         return cursor.fetchone()[0]
@@ -157,7 +157,7 @@ class GroupChatMessageRepository:
 
     def find_by_session(self, session_id: int) -> List[GroupChatMessage]:
         """获取会话的所有消息"""
-        cursor = db.connection.execute(
+        cursor = persistent_db.connection.execute(
             "SELECT * FROM group_chat_message WHERE session_id = ? ORDER BY created_at ASC",
             (session_id,)
         )
@@ -165,7 +165,7 @@ class GroupChatMessageRepository:
 
     def find_by_id(self, id: int) -> Optional[GroupChatMessage]:
         """根据 ID 查找"""
-        cursor = db.connection.execute(
+        cursor = persistent_db.connection.execute(
             "SELECT * FROM group_chat_message WHERE id = ?", (id,)
         )
         row = cursor.fetchone()
@@ -173,7 +173,7 @@ class GroupChatMessageRepository:
 
     def find_latest_round(self, session_id: int) -> int:
         """获取会话最新的讨论轮次"""
-        cursor = db.connection.execute(
+        cursor = persistent_db.connection.execute(
             "SELECT MAX(discussion_round) FROM group_chat_message WHERE session_id = ?",
             (session_id,)
         )
@@ -185,7 +185,7 @@ class GroupChatMessageRepository:
         mentioned_models_json = json.dumps(message.mentioned_models) if message.mentioned_models else None
 
         if message.id is None:
-            cursor = db.connection.execute(
+            cursor = persistent_db.connection.execute(
                 """
                 INSERT INTO group_chat_message (session_id, role, model_config_id, content,
                     mentioned_models, discussion_round)
@@ -196,24 +196,24 @@ class GroupChatMessageRepository:
             )
             message.id = cursor.lastrowid
             # 更新会话时间
-            db.connection.execute(
+            persistent_db.connection.execute(
                 "UPDATE group_chat_session SET updated_at=CURRENT_TIMESTAMP WHERE id=?",
                 (message.session_id,)
             )
-        db.connection.commit()
+        persistent_db.connection.commit()
         return message
 
     def delete_by_session(self, session_id: int) -> int:
         """删除会话的所有消息"""
-        cursor = db.connection.execute(
+        cursor = persistent_db.connection.execute(
             "DELETE FROM group_chat_message WHERE session_id = ?", (session_id,)
         )
-        db.connection.commit()
+        persistent_db.connection.commit()
         return cursor.rowcount
 
     def count_by_session(self, session_id: int) -> int:
         """统计会话消息数量"""
-        cursor = db.connection.execute(
+        cursor = persistent_db.connection.execute(
             "SELECT COUNT(*) FROM group_chat_message WHERE session_id = ?", (session_id,)
         )
         return cursor.fetchone()[0]

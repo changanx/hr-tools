@@ -9,6 +9,42 @@ from PySide6.QtWidgets import QApplication
 import sys
 
 
+@pytest.fixture(scope="session", autouse=True)
+def setup_test_storage():
+    """
+    测试会话开始时设置测试存储路径
+    使用临时目录，避免污染用户数据
+    """
+    from app.common.storage_config import storage_config_manager
+    import tempfile
+
+    # 使用临时目录作为测试数据存储
+    test_data_dir = tempfile.mkdtemp(prefix="hr-tools-test-")
+    storage_config_manager.set_data_dir(test_data_dir)
+
+    yield
+
+    # 测试结束后清理
+    shutil.rmtree(test_data_dir, ignore_errors=True)
+
+
+@pytest.fixture(autouse=True)
+def clean_persistent_db():
+    """
+    每个测试前清理持久化数据库
+    确保测试数据隔离
+    """
+    from data.database import persistent_db
+
+    # 清理持久化数据库
+    persistent_db.clear()
+
+    yield
+
+    # 测试后也清理
+    persistent_db.clear()
+
+
 @pytest.fixture(scope="session")
 def qapp():
     """创建 QApplication 实例"""
