@@ -2,6 +2,7 @@
 HR 工具箱 - 应用入口
 """
 import sys
+import os
 import ctypes
 from pathlib import Path
 
@@ -12,6 +13,44 @@ from qfluentwidgets import setTheme, Theme
 
 from app.view.main_window import MainWindow
 from app.common.logger import logger
+
+
+def init_default_model_config():
+    """初始化默认模型配置（从环境变量）"""
+    from data.repositories.ai_config_repository import AIModelConfigRepository
+    from data.models.ai_config import AIModelConfig
+
+    repo = AIModelConfigRepository()
+
+    # 检查是否已有配置
+    existing = repo.find_all()
+    if existing:
+        logger.info(f"已存在 {len(existing)} 个模型配置，跳过自动创建")
+        return
+
+    # 从环境变量读取
+    api_key = os.environ.get("ANTHROPIC_AUTH_TOKEN", "")
+    base_url = os.environ.get("ANTHROPIC_BASE_URL", "https://api.lkeap.cloud.tencent.com/coding/anthropic")
+    model_name = os.environ.get("ANTHROPIC_MODEL", "glm-5")
+
+    if not api_key:
+        logger.warning("未设置 ANTHROPIC_AUTH_TOKEN 环境变量，请手动配置模型")
+        return
+
+    # 创建默认配置
+    config = AIModelConfig(
+        name="默认模型",
+        provider="tencent_claude",
+        model_name=model_name,
+        api_key=api_key,
+        base_url=base_url,
+        temperature=0.7,
+        max_tokens=4096,
+        is_default=True,
+        is_enabled=True,
+    )
+    repo.save(config)
+    logger.info(f"已自动创建默认模型配置: {model_name}")
 
 
 # 单实例标识
@@ -141,6 +180,9 @@ def main():
     # 设置主题
     setTheme(Theme.LIGHT)
     logger.info("主题设置完成: LIGHT")
+
+    # 初始化默认模型配置
+    init_default_model_config()
 
     # 创建主窗口
     window = MainWindow()

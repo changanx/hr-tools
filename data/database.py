@@ -101,9 +101,44 @@ class Database:
                 FOREIGN KEY (session_id) REFERENCES chat_session(id) ON DELETE CASCADE
             );
 
+            -- 群聊相关表
+            CREATE TABLE IF NOT EXISTS group_chat_session (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                title TEXT NOT NULL DEFAULT '新群聊',
+                max_discussion_rounds INTEGER DEFAULT 3,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+
+            CREATE TABLE IF NOT EXISTS group_chat_participant (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                model_config_id INTEGER NOT NULL,
+                nickname TEXT,
+                role_description TEXT,
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES group_chat_session(id) ON DELETE CASCADE,
+                FOREIGN KEY (model_config_id) REFERENCES ai_model_config(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS group_chat_message (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id INTEGER NOT NULL,
+                role TEXT NOT NULL,
+                model_config_id INTEGER,
+                content TEXT NOT NULL,
+                mentioned_models TEXT,
+                discussion_round INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                FOREIGN KEY (session_id) REFERENCES group_chat_session(id) ON DELETE CASCADE,
+                FOREIGN KEY (model_config_id) REFERENCES ai_model_config(id)
+            );
+
             CREATE INDEX IF NOT EXISTS idx_department_parent ON department(parent_id);
             CREATE INDEX IF NOT EXISTS idx_employee_dept ON employee(department_level3);
             CREATE INDEX IF NOT EXISTS idx_chat_message_session ON chat_message(session_id);
+            CREATE INDEX IF NOT EXISTS idx_group_chat_participant_session ON group_chat_participant(session_id);
+            CREATE INDEX IF NOT EXISTS idx_group_chat_message_session ON group_chat_message(session_id);
         """)
         self.connection.commit()
 
@@ -129,10 +164,14 @@ class Database:
     def clear(self):
         """清空所有数据"""
         logger.info("清空数据库数据")
-        self.connection.execute("DELETE FROM employee")
-        self.connection.execute("DELETE FROM department")
+        # 按外键依赖顺序删除（先删除依赖表）
+        self.connection.execute("DELETE FROM group_chat_message")
+        self.connection.execute("DELETE FROM group_chat_participant")
+        self.connection.execute("DELETE FROM group_chat_session")
         self.connection.execute("DELETE FROM chat_message")
         self.connection.execute("DELETE FROM chat_session")
+        self.connection.execute("DELETE FROM employee")
+        self.connection.execute("DELETE FROM department")
         self.connection.execute("DELETE FROM ai_model_config")
         self.connection.commit()
 
