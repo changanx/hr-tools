@@ -23,8 +23,8 @@ class MainWindow(FluentWindow):
         self.groupChatInterface = GroupChatInterface(self)
         self.aiSettingsInterface = AISettingsInterface(self)
 
-        # 创建日志窗口
-        self.logViewerWindow = LogViewerWindow(self)
+        # 创建日志窗口（独立窗口，不作为子窗口）
+        self.logViewerWindow = LogViewerWindow()
 
         self.initNavigation()
         self.initWindow()

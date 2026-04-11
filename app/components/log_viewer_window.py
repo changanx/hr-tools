@@ -33,9 +33,11 @@ class LogViewerWindow(QWidget):
 
     def __init__(self, parent: Optional[QWidget] = None):
         super().__init__(parent)
+        # 设置为独立窗口
+        self.setWindowFlags(Qt.Window | Qt.WindowCloseButtonHint)
         self.setWindowTitle("日志查看器")
-        self.setMinimumSize(800, 500)
-        self.resize(1000, 600)
+        self.setMinimumSize(600, 400)
+        self.resize(800, 500)
 
         self._initUI()
         self._connectSignals()
@@ -64,6 +66,12 @@ class LogViewerWindow(QWidget):
         self.clearBtn.setFixedWidth(80)
         self.clearBtn.clicked.connect(self._clearLog)
         headerLayout.addWidget(self.clearBtn)
+
+        # 关闭按钮
+        self.closeBtn = FluentPushButton(FIF.CLOSE, "关闭", self)
+        self.closeBtn.setFixedWidth(80)
+        self.closeBtn.clicked.connect(self.hide)
+        headerLayout.addWidget(self.closeBtn)
 
         layout.addLayout(headerLayout)
 
