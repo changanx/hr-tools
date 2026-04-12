@@ -353,7 +353,7 @@ class ModelManager:
         lc_messages = self._convert_messages(messages)
 
         # 工具调用循环
-        max_iterations = 10  # 防止无限循环
+        max_iterations = 20  # 防止无限循环
         iteration = 0
 
         while iteration < max_iterations:
