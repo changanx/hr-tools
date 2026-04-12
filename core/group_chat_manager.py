@@ -3,6 +3,7 @@
 """
 import re
 import json
+import uuid
 import concurrent.futures
 from typing import Optional, List, Dict, Any, Generator
 from dataclasses import dataclass
@@ -454,23 +455,56 @@ class GroupChatManager:
             """调用单个模型"""
             model_instance = self._ensure_model_instance(participant)
             if not model_instance:
-                return participant.id, [], "模型实例未找到"
+                return participant.id, [], [], "模型实例未找到"
 
             system_prompt = self._build_system_prompt(participant, all_participants)
             messages = [{"role": "system", "content": system_prompt}] + context
 
-            chunks = []
+            all_chunks = []
+            all_tool_events = []
             try:
-                for chunk in model_instance.model.stream(messages):
-                    chunks.append(chunk)
+                # 支持工具调用循环
+                max_iterations = 10
+                for iteration in range(max_iterations):
+                    chunks = []
+                    tool_calls_chunks = []
+                    has_content = False
+
+                    for chunk in model_instance.model.stream(messages):
+                        chunks.append(chunk)
+                        # 收集工具调用
+                        if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
+                            tool_calls_chunks.extend(chunk.tool_call_chunks)
+                        if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
+                            for tc in chunk.tool_calls:
+                                if tc.get('name'):
+                                    tool_calls_chunks.append(tc)
+                        # 检查是否有内容
+                        if hasattr(chunk, 'content') and chunk.content:
+                            has_content = True
+
+                    all_chunks.extend(chunks)
+
+                    # 处理工具调用
+                    if tool_calls_chunks:
+                        tool_events = self._process_tool_calls(
+                            tool_calls_chunks, messages, participant.nickname
+                        )
+                        all_tool_events.extend(tool_events)
+                        # 如果有工具调用，继续循环让模型处理结果
+                        continue
+                    else:
+                        # 没有工具调用，结束循环
+                        break
+
             except Exception as e:
                 logger.error("模型调用失败", extra={
                     "model": participant.nickname,
                     "error": str(e)
                 })
-                return participant.id, [], str(e)
+                return participant.id, all_chunks, all_tool_events, str(e)
 
-            return participant.id, chunks, None
+            return participant.id, all_chunks, all_tool_events, None
 
         # 限制并发数量，避免资源耗尽
         max_workers = min(len(participants), 5)
@@ -492,7 +526,11 @@ class GroupChatManager:
                     }
 
                     try:
-                        participant_id, chunks, error = future.result(timeout=timeout_per_model)
+                        participant_id, chunks, tool_events, error = future.result(timeout=timeout_per_model)
+
+                        # 先输出工具调用事件
+                        for event in tool_events:
+                            yield event
 
                         if error:
                             yield {
@@ -576,8 +614,39 @@ class GroupChatManager:
             messages = [{"role": "system", "content": system_prompt}] + context
 
             try:
-                chunks = list(model_instance.model.stream(messages))
-                content = self._process_model_chunks(participant.id, chunks, participant, round_num)
+                # 支持工具调用循环
+                max_iterations = 10
+                all_chunks = []
+
+                for iteration in range(max_iterations):
+                    chunks = []
+                    tool_calls_chunks = []
+
+                    for chunk in model_instance.model.stream(messages):
+                        chunks.append(chunk)
+                        # 收集工具调用
+                        if hasattr(chunk, 'tool_call_chunks') and chunk.tool_call_chunks:
+                            tool_calls_chunks.extend(chunk.tool_call_chunks)
+                        if hasattr(chunk, 'tool_calls') and chunk.tool_calls:
+                            for tc in chunk.tool_calls:
+                                if tc.get('name'):
+                                    tool_calls_chunks.append(tc)
+
+                    all_chunks.extend(chunks)
+
+                    # 处理工具调用
+                    if tool_calls_chunks:
+                        tool_events = self._process_tool_calls(
+                            tool_calls_chunks, messages, participant.nickname
+                        )
+                        # 输出工具事件
+                        for event in tool_events:
+                            yield event
+                        continue
+                    else:
+                        break
+
+                content = self._process_model_chunks(participant.id, all_chunks, participant, round_num)
                 yield {
                     "type": "model_response_complete",
                     "participant_id": participant.id,
@@ -599,6 +668,142 @@ class GroupChatManager:
                 "participant_id": participant.id,
                 "nickname": participant.nickname
             }
+
+    def _process_tool_calls(
+        self,
+        tool_calls_chunks: List,
+        messages: List[Dict],
+        model_nickname: str
+    ) -> List[Dict[str, Any]]:
+        """
+        处理工具调用并添加到消息历史
+
+        Args:
+            tool_calls_chunks: 工具调用片段列表
+            messages: 消息历史（会被修改）
+            model_nickname: 模型昵称（用于日志）
+
+        Returns:
+            工具事件列表（用于通知 UI）
+        """
+        from langchain_core.messages import AIMessage, ToolMessage
+
+        # 聚合工具调用
+        aggregated = self._aggregate_tool_calls(tool_calls_chunks)
+        events = []
+
+        for tc in aggregated:
+            name = tc["name"]
+            args = tc["args"]
+            tc_id = tc.get("id", str(uuid.uuid4()))
+
+            logger.info("群聊工具调用", extra={
+                "model": model_nickname,
+                "tool": name,
+                "args": str(args)[:200]
+            })
+
+            # 执行工具
+            result = self._execute_tool(name, args)
+
+            # 通知事件（用于 UI 显示）
+            events.append({
+                "type": "tool_call",
+                "name": name,
+                "args": args,
+                "id": tc_id
+            })
+            events.append({
+                "type": "tool_result",
+                "name": name,
+                "result": result
+            })
+
+            # 添加到消息历史（过滤内部字段）
+            clean_tc = {k: v for k, v in tc.items() if not k.startswith("_")}
+            messages.append(AIMessage(content="", tool_calls=[clean_tc]))
+            messages.append(ToolMessage(content=result, tool_call_id=tc_id))
+
+        return events
+
+    def _aggregate_tool_calls(self, chunks: List) -> List[Dict[str, Any]]:
+        """聚合流式工具调用片段"""
+        aggregated = {}
+
+        for chunk in chunks:
+            if isinstance(chunk, dict):
+                idx = chunk.get("index", 0)
+                name = chunk.get("name", "")
+                args_str = chunk.get("args", "")
+                tc_id = chunk.get("id", "")
+            else:
+                idx = getattr(chunk, "index", 0) or getattr(chunk, "get", lambda k, d: d)("index", 0)
+                name = getattr(chunk, "name", "") or getattr(chunk, "get", lambda k, d: d)("name", "")
+                args_str = getattr(chunk, "args", "") or getattr(chunk, "get", lambda k, d: d)("args", "")
+                tc_id = getattr(chunk, "id", "") or getattr(chunk, "get", lambda k, d: d)("id", "")
+
+            if idx not in aggregated:
+                aggregated[idx] = {
+                    "id": tc_id or str(uuid.uuid4()),
+                    "name": name,
+                    "args_str": ""
+                }
+
+            if name:
+                aggregated[idx]["name"] = name
+            if args_str:
+                aggregated[idx]["args_str"] += args_str
+            if tc_id:
+                aggregated[idx]["id"] = tc_id
+
+        # 解析参数
+        results = []
+        for idx, tc in aggregated.items():
+            args = {}
+            parse_error = None
+            if tc["args_str"]:
+                try:
+                    args = json.loads(tc["args_str"])
+                except json.JSONDecodeError as e:
+                    parse_error = str(e)
+                    args = {
+                        "_parse_error": parse_error,
+                        "_raw_args": tc["args_str"]
+                    }
+
+            results.append({
+                "id": tc["id"],
+                "name": tc["name"],
+                "args": args,
+                "_has_parse_error": parse_error is not None
+            })
+
+        return results
+
+    def _execute_tool(self, name: str, args: Dict[str, Any]) -> str:
+        """执行工具"""
+        # 检查参数解析错误
+        if args.get("_parse_error"):
+            raw_args = args.get("_raw_args", "")
+            return f"错误: 工具 '{name}' 的参数解析失败。\n原始参数: {raw_args[:100]}"
+
+        if not self._tools:
+            return f"错误: 未设置工作目录，无法执行工具"
+
+        # 查找工具执行函数
+        for tool in self._tools:
+            if tool.name == name:
+                try:
+                    # 过滤内部字段
+                    clean_args = {k: v for k, v in args.items() if not k.startswith("_")}
+                    result = str(tool.func(**clean_args))
+                    logger.debug("工具执行完成", extra={"tool": name, "result_length": len(result)})
+                    return result
+                except Exception as e:
+                    logger.error("工具执行失败", extra={"tool": name, "error": str(e)})
+                    return f"工具执行错误 ({name}): {str(e)}"
+
+        return f"错误: 未知的工具 '{name}'"
 
     def _process_model_chunks(
         self,
