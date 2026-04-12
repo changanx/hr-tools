@@ -104,19 +104,19 @@ class GroupChatParticipantRepository:
         if participant.id is None:
             cursor = persistent_db.connection.execute(
                 """
-                INSERT INTO group_chat_participant (model_config_id, nickname, role_description)
-                VALUES (?, ?, ?)
+                INSERT INTO group_chat_participant (model_config_id, nickname, role_description, avatar)
+                VALUES (?, ?, ?, ?)
                 """,
-                (participant.model_config_id, participant.nickname, participant.role_description)
+                (participant.model_config_id, participant.nickname, participant.role_description, participant.avatar)
             )
             participant.id = cursor.lastrowid
         else:
             persistent_db.connection.execute(
                 """
-                UPDATE group_chat_participant SET nickname=?, role_description=?
+                UPDATE group_chat_participant SET nickname=?, role_description=?, avatar=?
                 WHERE id=?
                 """,
-                (participant.nickname, participant.role_description, participant.id)
+                (participant.nickname, participant.role_description, participant.avatar, participant.id)
             )
         persistent_db.connection.commit()
         return participant

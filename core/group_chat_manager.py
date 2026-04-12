@@ -128,7 +128,8 @@ class GroupChatManager:
         self,
         model_config_id: int,
         nickname: str = "",
-        role_description: str = ""
+        role_description: str = "",
+        avatar: str = "ROBOT"
     ) -> Optional[GroupChatParticipant]:
         """添加全局参与者"""
         # 检查模型配置是否存在
@@ -150,7 +151,8 @@ class GroupChatManager:
         participant = GroupChatParticipant(
             model_config_id=model_config_id,
             nickname=nickname,
-            role_description=role_description
+            role_description=role_description,
+            avatar=avatar
         )
         participant = self._participant_repo.save(participant)
 
@@ -188,7 +190,8 @@ class GroupChatManager:
         self,
         participant_id: int,
         nickname: str = None,
-        role_description: str = None
+        role_description: str = None,
+        avatar: str = None
     ) -> Optional[GroupChatParticipant]:
         """更新参与者信息"""
         participant = self._participant_repo.find_by_id(participant_id)
@@ -199,6 +202,8 @@ class GroupChatManager:
             participant.nickname = nickname
         if role_description is not None:
             participant.role_description = role_description
+        if avatar is not None:
+            participant.avatar = avatar
 
         participant = self._participant_repo.save(participant)
 
@@ -522,7 +527,8 @@ class GroupChatManager:
                     yield {
                         "type": "model_response_start",
                         "participant_id": participant.id,
-                        "nickname": participant.nickname
+                        "nickname": participant.nickname,
+                        "avatar": participant.avatar
                     }
 
                     try:
@@ -604,7 +610,8 @@ class GroupChatManager:
             yield {
                 "type": "model_response_start",
                 "participant_id": participant.id,
-                "nickname": participant.nickname
+                "nickname": participant.nickname,
+                "avatar": participant.avatar
             }
 
             system_prompt = self._build_system_prompt(participant, all_participants)

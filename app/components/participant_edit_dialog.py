@@ -8,12 +8,32 @@ from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QSpacerItem, QS
 
 from qfluentwidgets import (
     MessageBoxBase, SubtitleLabel, BodyLabel, LineEdit,
-    ComboBox, PushButton, TextEdit, FluentIcon as FIF
+    ComboBox, PushButton, TextEdit, FluentIcon as FIF, AvatarWidget
 )
 
 from data.models.ai_config import AIModelConfig
 from data.repositories.ai_config_repository import AIModelConfigRepository
 from core.group_chat_manager import ROLE_TEMPLATES
+
+
+# 可选头像列表（FluentIcon 名称）
+AVATAR_OPTIONS = [
+    ("🤖 机器人", "ROBOT"),
+    ("🧠 大脑", "BRAIN"),
+    ("💡 灯泡", "IDEA"),
+    ("🎯 目标", "TARGET"),
+    ("⚡ 闪电", "FLASH"),
+    ("🔥 火焰", "FIRE"),
+    ("⭐ 星星", "STAR"),
+    ("🌙 月亮", "MOON"),
+    ("☀️ 太阳", "SUN"),
+    ("🍀 幸运草", "LEAF"),
+    ("🎨 调色板", "PALETTE"),
+    ("🎵 音乐", "MUSIC"),
+    ("📖 书本", "BOOK"),
+    ("💎 钻石", "GEM"),
+    ("🚀 火箭", "ROCKET"),
+]
 
 
 class ParticipantEditDialog(MessageBoxBase):
@@ -55,6 +75,15 @@ class ParticipantEditDialog(MessageBoxBase):
         self.nicknameEdit.setPlaceholderText("例如: @gpt-4")
         self.viewLayout.addWidget(self.nicknameLabel)
         self.viewLayout.addWidget(self.nicknameEdit)
+
+        # 头像选择
+        self.avatarLabel = BodyLabel("头像:", self)
+        self.avatarCombo = ComboBox(self)
+        self.avatarCombo.setMinimumWidth(200)
+        for display_name, icon_name in AVATAR_OPTIONS:
+            self.avatarCombo.addItem(display_name, userData=icon_name)
+        self.viewLayout.addWidget(self.avatarLabel)
+        self.viewLayout.addWidget(self.avatarCombo)
 
         # 角色模板
         self.templateLabel = BodyLabel("角色模板:", self)
@@ -103,6 +132,13 @@ class ParticipantEditDialog(MessageBoxBase):
         # 昵称
         self.nicknameEdit.setText(self._participant.nickname)
 
+        # 头像
+        avatar = self._participant.avatar or "ROBOT"
+        for i in range(self.avatarCombo.count()):
+            if self.avatarCombo.itemData(i) == avatar:
+                self.avatarCombo.setCurrentIndex(i)
+                break
+
         # 角色描述
         self.roleEdit.setPlainText(self._participant.role_description)
 
@@ -137,8 +173,12 @@ class ParticipantEditDialog(MessageBoxBase):
         model_index = self.modelCombo.currentIndex()
         model_id = self._models[model_index].id if model_index >= 0 and model_index < len(self._models) else None
 
+        avatar_index = self.avatarCombo.currentIndex()
+        avatar = self.avatarCombo.itemData(avatar_index) if avatar_index >= 0 else "ROBOT"
+
         return {
             "model_config_id": model_id,
             "nickname": self.nicknameEdit.text().strip(),
             "role_description": self.roleEdit.toPlainText().strip(),
+            "avatar": avatar,
         }

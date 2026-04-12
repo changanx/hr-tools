@@ -21,7 +21,7 @@ class GroupChatMessageWidget(QWidget):
         Args:
             role: "user" 或 "assistant"
             content: 消息内容
-            model_info: {"id": int, "name": str, "nickname": str}
+            model_info: {"id": int, "name": str, "nickname": str, "avatar": str}
         """
         super().__init__(parent)
         self._role = role
@@ -52,9 +52,11 @@ class GroupChatMessageWidget(QWidget):
         headerLayout.setSpacing(8)
 
         if not is_user and self._model_info:
-            # AI 模型图标
+            # AI 模型头像
             nickname = self._model_info.get("nickname", "AI")
-            icon_label = BodyLabel("🤖", self)
+            avatar = self._model_info.get("avatar", "ROBOT")
+            avatar_emoji = self._get_avatar_emoji(avatar)
+            icon_label = BodyLabel(avatar_emoji, self)
             headerLayout.addWidget(icon_label)
 
             # 昵称
@@ -267,3 +269,24 @@ class GroupChatMessageWidget(QWidget):
     def get_model_info(self) -> Dict:
         """获取模型信息"""
         return self._model_info
+
+    def _get_avatar_emoji(self, avatar_name: str) -> str:
+        """根据头像名称返回 emoji"""
+        avatar_map = {
+            "ROBOT": "🤖",
+            "BRAIN": "🧠",
+            "IDEA": "💡",
+            "TARGET": "🎯",
+            "FLASH": "⚡",
+            "FIRE": "🔥",
+            "STAR": "⭐",
+            "MOON": "🌙",
+            "SUN": "☀️",
+            "LEAF": "🍀",
+            "PALETTE": "🎨",
+            "MUSIC": "🎵",
+            "BOOK": "📖",
+            "GEM": "💎",
+            "ROCKET": "🚀",
+        }
+        return avatar_map.get(avatar_name, "🤖")

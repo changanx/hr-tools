@@ -216,6 +216,7 @@ class PersistentDatabase:
                 model_config_id INTEGER NOT NULL,
                 nickname TEXT NOT NULL,
                 role_description TEXT,
+                avatar TEXT DEFAULT 'ROBOT',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (model_config_id) REFERENCES ai_model_config(id)
             );
@@ -244,10 +245,16 @@ class PersistentDatabase:
 
     def _migrate_group_chat_schema(self, conn: sqlite3.Connection):
         """迁移群聊相关的数据库结构"""
-        # 检查是否需要迁移（group_chat_participant 是否有 session_id 列）
         cursor = conn.execute("PRAGMA table_info(group_chat_participant)")
         columns = [row[1] for row in cursor.fetchall()]
 
+        # 1. 添加 avatar 字段（如果不存在）
+        if 'avatar' not in columns:
+            logger.info("添加群聊参与者 avatar 字段")
+            conn.execute("ALTER TABLE group_chat_participant ADD COLUMN avatar TEXT DEFAULT 'ROBOT'")
+            conn.commit()
+
+        # 2. 检查是否需要迁移（group_chat_participant 是否有 session_id 列）
         if 'session_id' in columns:
             logger.info("迁移群聊数据库结构：参与者改为全局配置")
 
@@ -273,6 +280,7 @@ class PersistentDatabase:
                     model_config_id INTEGER NOT NULL,
                     nickname TEXT NOT NULL,
                     role_description TEXT,
+                    avatar TEXT DEFAULT 'ROBOT',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     FOREIGN KEY (model_config_id) REFERENCES ai_model_config(id)
                 );

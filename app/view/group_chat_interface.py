@@ -348,7 +348,11 @@ class GroupChatInterface(ScrollArea):
             elif msg.role == "assistant":
                 participant = participants.get(msg.participant_id)
                 if participant:
-                    self._addMessage("assistant", msg.content, {"id": participant.id, "nickname": participant.nickname})
+                    self._addMessage("assistant", msg.content, {
+                        "id": participant.id,
+                        "nickname": participant.nickname,
+                        "avatar": participant.avatar
+                    })
 
     def _newSession(self):
         """新建群聊会话"""
@@ -423,10 +427,21 @@ class GroupChatInterface(ScrollArea):
         config = self._model_config_repo.find_by_id(participant.model_config_id)
         model_name = config.name if config else "未知"
 
+        # 顶部：头像 + 昵称
+        headerLayout = QHBoxLayout()
+        headerLayout.setSpacing(4)
+
+        # 头像（emoji）
+        avatar_emoji = self._get_avatar_emoji(participant.avatar)
+        avatar_label = BodyLabel(avatar_emoji, card)
+        headerLayout.addWidget(avatar_label)
+
         # 昵称
         nickname_label = BodyLabel(participant.nickname, card)
         nickname_label.setStyleSheet("color: #1976d2; font-weight: bold;")
-        layout.addWidget(nickname_label)
+        headerLayout.addWidget(nickname_label, 1)
+
+        layout.addLayout(headerLayout)
 
         # 模型名
         model_label = CaptionLabel(model_name, card)
@@ -467,7 +482,8 @@ class GroupChatInterface(ScrollArea):
             participant = group_chat_manager.add_participant(
                 model_config_id=data["model_config_id"],
                 nickname=data["nickname"],
-                role_description=data["role_description"]
+                role_description=data["role_description"],
+                avatar=data.get("avatar", "ROBOT")
             )
             if participant:
                 self._refreshParticipantsUI()
@@ -490,7 +506,8 @@ class GroupChatInterface(ScrollArea):
             updated = group_chat_manager.update_participant(
                 participant_id=participant_id,
                 nickname=data["nickname"],
-                role_description=data["role_description"]
+                role_description=data["role_description"],
+                avatar=data.get("avatar")
             )
             if updated:
                 self._refreshParticipantsUI()
@@ -592,9 +609,14 @@ class GroupChatInterface(ScrollArea):
         if msg_type == "model_response_start":
             participant_id = chunk.get("participant_id")
             nickname = chunk.get("nickname", "AI")
+            avatar = chunk.get("avatar", "ROBOT")
 
             # 创建新的消息 widget
-            widget = self._addMessage("assistant", "", {"id": participant_id, "nickname": nickname})
+            widget = self._addMessage("assistant", "", {
+                "id": participant_id,
+                "nickname": nickname,
+                "avatar": avatar
+            })
             self._participant_widgets[participant_id] = widget
             self._current_participant_id = participant_id
 
@@ -660,3 +682,24 @@ class GroupChatInterface(ScrollArea):
         self.inputEdit.setEnabled(True)
         self._worker = None
         self._current_participant_id = None
+
+    def _get_avatar_emoji(self, avatar_name: str) -> str:
+        """根据头像名称返回 emoji"""
+        avatar_map = {
+            "ROBOT": "🤖",
+            "BRAIN": "🧠",
+            "IDEA": "💡",
+            "TARGET": "🎯",
+            "FLASH": "⚡",
+            "FIRE": "🔥",
+            "STAR": "⭐",
+            "MOON": "🌙",
+            "SUN": "☀️",
+            "LEAF": "🍀",
+            "PALETTE": "🎨",
+            "MUSIC": "🎵",
+            "BOOK": "📖",
+            "GEM": "💎",
+            "ROCKET": "🚀",
+        }
+        return avatar_map.get(avatar_name, "🤖")

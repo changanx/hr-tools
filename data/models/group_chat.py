@@ -49,6 +49,7 @@ class GroupChatParticipant:
     model_config_id: int = 0                # 模型配置 ID
     nickname: str = ""                      # 群聊中的昵称（如 @gpt4）
     role_description: str = ""              # 角色描述
+    avatar: str = "ROBOT"                   # 头像图标名称（FluentIcon）
     created_at: str = ""                    # 创建时间
 
     @classmethod
@@ -59,6 +60,7 @@ class GroupChatParticipant:
             model_config_id=row['model_config_id'] or 0,
             nickname=row['nickname'] or "",
             role_description=row['role_description'] or "",
+            avatar=row['avatar'] or "ROBOT",
             created_at=row['created_at'] or "",
         )
 
@@ -69,6 +71,7 @@ class GroupChatParticipant:
             'model_config_id': self.model_config_id,
             'nickname': self.nickname,
             'role_description': self.role_description,
+            'avatar': self.avatar,
             'created_at': self.created_at,
         }
 
