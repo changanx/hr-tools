@@ -19,16 +19,14 @@ from core.group_chat_manager import ROLE_TEMPLATES
 class ParticipantEditDialog(MessageBoxBase):
     """参与者编辑对话框"""
 
-    def __init__(self, parent=None, participant=None, session_id: int = 0):
+    def __init__(self, parent=None, participant=None):
         """
         Args:
             parent: 父窗口
             participant: 现有参与者（编辑模式）
-            session_id: 会话 ID（添加模式）
         """
         super().__init__(parent)
         self._participant = participant
-        self._session_id = session_id or (participant.session_id if participant else 0)
         self._model_config_repo = AIModelConfigRepository()
 
         self._initUI()
@@ -89,7 +87,7 @@ class ParticipantEditDialog(MessageBoxBase):
         self._models = models
 
         for model in models:
-            self.modelCombo.addItem(f"{model.name} ({model.model_name})", model.id)
+            self.modelCombo.addItem(f"{model.name} ({model.model_name})")
 
     def _fillExistingData(self):
         """填充现有数据（编辑模式）"""
@@ -97,8 +95,8 @@ class ParticipantEditDialog(MessageBoxBase):
             return
 
         # 选择模型
-        for i in range(self.modelCombo.count()):
-            if self.modelCombo.itemData(i) == self._participant.model_config_id:
+        for i, model in enumerate(self._models):
+            if model.id == self._participant.model_config_id:
                 self.modelCombo.setCurrentIndex(i)
                 break
 
@@ -137,7 +135,7 @@ class ParticipantEditDialog(MessageBoxBase):
     def get_data(self) -> dict:
         """获取对话框数据"""
         model_index = self.modelCombo.currentIndex()
-        model_id = self.modelCombo.itemData(model_index) if model_index >= 0 else None
+        model_id = self._models[model_index].id if model_index >= 0 and model_index < len(self._models) else None
 
         return {
             "model_config_id": model_id,

@@ -21,7 +21,7 @@ from app.common.logger import get_signal_handler
 # 日志级别颜色映射
 LEVEL_COLORS = {
     "DEBUG": "#808080",    # 灰色
-    "INFO": "#000000",     # 黑色
+    "INFO": "#4EC9B0",     # 青绿色（在深色背景上清晰可见）
     "WARNING": "#FF8C00",  # 橙色
     "ERROR": "#FF0000",    # 红色
     "CRITICAL": "#8B0000", # 深红色
@@ -39,6 +39,7 @@ class LogViewerWindow(QWidget):
         self.setMinimumSize(600, 400)
         self.resize(800, 500)
 
+        self._signal_connected = False  # 跟踪信号连接状态
         self._initUI()
         self._connectSignals()
 
@@ -109,22 +110,23 @@ class LogViewerWindow(QWidget):
         """连接日志信号"""
         handler = get_signal_handler()
         if handler and handler.emitter:
-            # 使用 try-except 安全断开连接
-            try:
-                # 检查是否已连接（通过尝试断开来判断）
-                handler.emitter.log_received.disconnect(self._onLogReceived)
-            except Exception:
-                # 忽略所有异常（包括未连接的情况）
-                pass
+            # 如果已连接，先断开
+            if self._signal_connected:
+                try:
+                    handler.emitter.log_received.disconnect(self._onLogReceived)
+                except Exception:
+                    pass
             # 建立新连接
             handler.emitter.log_received.connect(self._onLogReceived)
+            self._signal_connected = True
 
     def closeEvent(self, event):
         """窗口关闭时断开信号连接"""
         handler = get_signal_handler()
-        if handler and handler.emitter:
+        if handler and handler.emitter and self._signal_connected:
             try:
                 handler.emitter.log_received.disconnect(self._onLogReceived)
+                self._signal_connected = False
             except Exception:
                 pass
         super().closeEvent(event)

@@ -81,6 +81,7 @@ class AIChatInterface(ScrollArea):
         self._messages: List[Dict[str, str]] = []
         self._worker: Optional[ChatWorker] = None
         self._current_message_widget: Optional[ChatMessageWidget] = None
+        self._configs: List[AIModelConfig] = []
 
         self._initUI()
         self._loadModelConfigs()
@@ -241,14 +242,16 @@ class AIChatInterface(ScrollArea):
 
         if not configs:
             self.modelCombo.addItem("请先配置模型")
+            self._configs = []
             self.sendBtn.setEnabled(False)
             self.modelCombo.blockSignals(False)
             return
 
+        self._configs = configs
         self.sendBtn.setEnabled(True)
         default_idx = 0
         for i, config in enumerate(configs):
-            self.modelCombo.addItem(config.name, userData=config)
+            self.modelCombo.addItem(config.name)
             if config.is_default:
                 default_idx = i
 
@@ -284,7 +287,9 @@ class AIChatInterface(ScrollArea):
 
     def _onModelChanged(self, index: int):
         """模型选择改变"""
-        config = self.modelCombo.itemData(index)
+        if index < 0 or index >= len(self._configs):
+            return
+        config = self._configs[index]
         if config and isinstance(config, AIModelConfig):
             try:
                 model_manager.set_current_model(config)
@@ -311,8 +316,9 @@ class AIChatInterface(ScrollArea):
 
             # 创建新会话
             self._current_session = ChatSession()
-            config = self.modelCombo.currentData()
-            if config:
+            index = self.modelCombo.currentIndex()
+            if index >= 0 and index < len(self._configs):
+                config = self._configs[index]
                 self._current_session.model_config_id = config.id
 
             # 保存到数据库
@@ -368,14 +374,16 @@ class AIChatInterface(ScrollArea):
         if not content:
             return
 
-        config = self.modelCombo.currentData()
-        if not config or not isinstance(config, AIModelConfig):
+        index = self.modelCombo.currentIndex()
+        if index < 0 or index >= len(self._configs):
             InfoBar.warning(
                 title="提示",
                 content="请先配置 AI 模型",
                 parent=self
             )
             return
+
+        config = self._configs[index]
 
         # 添加用户消息
         self._addMessage("user", content)

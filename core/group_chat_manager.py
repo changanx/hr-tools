@@ -76,9 +76,8 @@ class GroupChatManager:
         self._message_repo = GroupChatMessageRepository()
         self._model_config_repo = AIModelConfigRepository()
 
-        # 会话相关的模型实例缓存
-        # session_id -> {model_config_id -> ModelInstance}
-        self._session_models: Dict[int, Dict[int, ModelInstance]] = {}
+        # 全局模型实例缓存（participant_id -> ModelInstance）
+        self._model_instances: Dict[int, ModelInstance] = {}
 
         # 工具相关
         self._security_context: Optional[SecurityContext] = None
@@ -93,7 +92,6 @@ class GroupChatManager:
         """创建群聊会话"""
         session = GroupChatSession(title=title, max_discussion_rounds=max_rounds)
         session = self._session_repo.save(session)
-        self._session_models[session.id] = {}
         logger.info("创建群聊会话", extra={"session_id": session.id, "title": title})
         return session
 
@@ -107,8 +105,6 @@ class GroupChatManager:
 
     def delete_session(self, session_id: int) -> bool:
         """删除群聊会话"""
-        if session_id in self._session_models:
-            del self._session_models[session_id]
         return self._session_repo.delete(session_id)
 
     def set_current_session(self, session_id: int) -> bool:
@@ -116,8 +112,6 @@ class GroupChatManager:
         session = self.get_session(session_id)
         if session:
             self._current_session_id = session_id
-            # 确保模型实例已加载
-            self._ensure_models_loaded(session_id)
             return True
         return False
 
@@ -131,22 +125,21 @@ class GroupChatManager:
 
     def add_participant(
         self,
-        session_id: int,
         model_config_id: int,
         nickname: str = "",
         role_description: str = ""
     ) -> Optional[GroupChatParticipant]:
-        """添加参与者"""
+        """添加全局参与者"""
         # 检查模型配置是否存在
         config = self._model_config_repo.find_by_id(model_config_id)
         if not config:
             logger.warning("模型配置不存在", extra={"model_config_id": model_config_id})
             return None
 
-        # 检查是否已存在
-        existing = self._participant_repo.find_by_session_and_model(session_id, model_config_id)
+        # 检查是否已存在（同一模型只能有一个参与者）
+        existing = self._participant_repo.find_by_model_config(model_config_id)
         if existing:
-            logger.warning("参与者已存在", extra={"session_id": session_id, "model_config_id": model_config_id})
+            logger.warning("参与者已存在", extra={"model_config_id": model_config_id})
             return None
 
         # 生成默认昵称
@@ -154,7 +147,6 @@ class GroupChatManager:
             nickname = f"@{config.name.lower().replace(' ', '_')}"
 
         participant = GroupChatParticipant(
-            session_id=session_id,
             model_config_id=model_config_id,
             nickname=nickname,
             role_description=role_description
@@ -162,10 +154,10 @@ class GroupChatManager:
         participant = self._participant_repo.save(participant)
 
         # 创建模型实例
-        self._create_model_instance(session_id, participant, config)
+        self._create_model_instance(participant, config)
 
         logger.info("添加参与者", extra={
-            "session_id": session_id,
+            "participant_id": participant.id,
             "model_config_id": model_config_id,
             "nickname": nickname
         })
@@ -177,19 +169,19 @@ class GroupChatManager:
         if not participant:
             return False
 
-        session_id = participant.session_id
-        model_config_id = participant.model_config_id
-
         # 从缓存中移除
-        if session_id in self._session_models:
-            if model_config_id in self._session_models[session_id]:
-                del self._session_models[session_id][model_config_id]
+        if participant_id in self._model_instances:
+            del self._model_instances[participant_id]
 
         return self._participant_repo.delete(participant_id)
 
-    def get_participants(self, session_id: int) -> List[GroupChatParticipant]:
-        """获取会话的所有参与者"""
-        return self._participant_repo.find_by_session(session_id)
+    def get_participants(self) -> List[GroupChatParticipant]:
+        """获取所有全局参与者"""
+        return self._participant_repo.find_all()
+
+    def get_participant(self, participant_id: int) -> Optional[GroupChatParticipant]:
+        """获取单个参与者"""
+        return self._participant_repo.find_by_id(participant_id)
 
     def update_participant(
         self,
@@ -210,10 +202,8 @@ class GroupChatManager:
         participant = self._participant_repo.save(participant)
 
         # 更新模型实例
-        session_id = participant.session_id
-        if session_id in self._session_models:
-            if participant.model_config_id in self._session_models[session_id]:
-                self._session_models[session_id][participant.model_config_id].participant = participant
+        if participant_id in self._model_instances:
+            self._model_instances[participant_id].participant = participant
 
         return participant
 
@@ -235,10 +225,9 @@ class GroupChatManager:
         self._tools = create_all_tools(self._security_context)
 
         # 绑定工具到所有模型
-        for session_id, models in self._session_models.items():
-            for model_instance in models.values():
-                if self._tools:
-                    model_instance.model = model_instance.model.bind_tools(self._tools)
+        for model_instance in self._model_instances.values():
+            if self._tools:
+                model_instance.model = model_instance.model.bind_tools(self._tools)
 
         logger.info("群聊工作目录已设置", extra={"directory": directory})
 
@@ -251,7 +240,7 @@ class GroupChatManager:
     def chat(
         self,
         user_message: str,
-        mentioned_model_ids: List[int] = None
+        mentioned_participant_ids: List[int] = None
     ) -> Generator[Dict[str, Any], None, None]:
         """
         发送消息并获取多模型回复
@@ -274,22 +263,19 @@ class GroupChatManager:
         if not session:
             raise RuntimeError("会话不存在")
 
-        participants = self.get_participants(session_id)
+        participants = self.get_participants()
         if not participants:
-            raise RuntimeError("会话没有参与者")
-
-        # 确保模型已加载
-        self._ensure_models_loaded(session_id)
+            raise RuntimeError("没有参与者，请先添加模型")
 
         # 解析 @ 提及
-        if mentioned_model_ids is None:
-            mentioned_model_ids = self.parse_mentions(user_message, participants)
+        if mentioned_participant_ids is None:
+            mentioned_participant_ids = self.parse_mentions(user_message, participants)
 
         # 确定回复的模型
-        if mentioned_model_ids:
+        if mentioned_participant_ids:
             replying_models = [
                 p for p in participants
-                if p.model_config_id in mentioned_model_ids
+                if p.id in mentioned_participant_ids
             ]
         else:
             replying_models = participants  # 默认全部回复
@@ -306,7 +292,7 @@ class GroupChatManager:
             session_id=session_id,
             role="user",
             content=user_message,
-            mentioned_models=mentioned_model_ids,
+            mentioned_models=mentioned_participant_ids,
             discussion_round=current_round
         )
         self._message_repo.save(user_msg)
@@ -345,7 +331,7 @@ class GroupChatManager:
         yield {"type": "discussion_end"}
 
     def parse_mentions(self, content: str, participants: List[GroupChatParticipant]) -> List[int]:
-        """解析消息中的 @ 提及（支持中文昵称）"""
+        """解析消息中的 @ 提及（支持中文昵称）- 返回 participant_id 列表"""
         mentioned_ids = []
 
         # 匹配 @nickname，支持中文、字母、数字、下划线
@@ -358,28 +344,15 @@ class GroupChatManager:
                 # 支持 @nickname 或 @name（去掉 @ 前缀）
                 nick = p.nickname.lstrip('@')
                 if nick.lower() == match.lower():
-                    mentioned_ids.append(p.model_config_id)
+                    mentioned_ids.append(p.id)
                     break
 
         return list(set(mentioned_ids))  # 去重
 
     # ==================== 内部方法 ====================
 
-    def _ensure_models_loaded(self, session_id: int) -> None:
-        """确保会话的模型实例已加载"""
-        if session_id not in self._session_models:
-            self._session_models[session_id] = {}
-
-        participants = self.get_participants(session_id)
-        for p in participants:
-            if p.model_config_id not in self._session_models[session_id]:
-                config = self._model_config_repo.find_by_id(p.model_config_id)
-                if config:
-                    self._create_model_instance(session_id, p, config)
-
     def _create_model_instance(
         self,
-        session_id: int,
         participant: GroupChatParticipant,
         config: AIModelConfig
     ) -> ModelInstance:
@@ -397,11 +370,18 @@ class GroupChatManager:
             participant=participant
         )
 
-        if session_id not in self._session_models:
-            self._session_models[session_id] = {}
-        self._session_models[session_id][participant.model_config_id] = instance
-
+        self._model_instances[participant.id] = instance
         return instance
+
+    def _ensure_model_instance(self, participant: GroupChatParticipant) -> Optional[ModelInstance]:
+        """确保模型实例存在"""
+        if participant.id in self._model_instances:
+            return self._model_instances[participant.id]
+
+        config = self._model_config_repo.find_by_id(participant.model_config_id)
+        if config:
+            return self._create_model_instance(participant, config)
+        return None
 
     def _build_system_prompt(
         self,
@@ -429,8 +409,8 @@ class GroupChatManager:
     def _build_context(self, session_id: int) -> List[Dict]:
         """构建对话上下文"""
         messages = self.get_messages(session_id)
-        participants = self.get_participants(session_id)
-        participant_map = {p.model_config_id: p for p in participants}
+        participants = self.get_participants()
+        participant_map = {p.id: p for p in participants}
 
         context = []
         for msg in messages:
@@ -440,7 +420,7 @@ class GroupChatManager:
                     "content": msg.content
                 })
             elif msg.role == "assistant":
-                participant = participant_map.get(msg.model_config_id)
+                participant = participant_map.get(msg.participant_id)
                 if participant:
                     # 在内容前加上模型标识
                     content = f"[{participant.nickname}]: {msg.content}"
@@ -468,14 +448,13 @@ class GroupChatManager:
         Yields:
             模型响应事件
         """
-        session_id = self._current_session_id
-        all_participants = self.get_participants(session_id)
+        all_participants = self.get_participants()
 
         def call_model(participant: GroupChatParticipant):
             """调用单个模型"""
-            model_instance = self._session_models[session_id].get(participant.model_config_id)
+            model_instance = self._ensure_model_instance(participant)
             if not model_instance:
-                return participant.model_config_id, [], "模型实例未找到"
+                return participant.id, [], "模型实例未找到"
 
             system_prompt = self._build_system_prompt(participant, all_participants)
             messages = [{"role": "system", "content": system_prompt}] + context
@@ -489,9 +468,9 @@ class GroupChatManager:
                     "model": participant.nickname,
                     "error": str(e)
                 })
-                return participant.model_config_id, [], str(e)
+                return participant.id, [], str(e)
 
-            return participant.model_config_id, chunks, None
+            return participant.id, chunks, None
 
         # 限制并发数量，避免资源耗尽
         max_workers = min(len(participants), 5)
@@ -508,25 +487,25 @@ class GroupChatManager:
 
                     yield {
                         "type": "model_response_start",
-                        "model_config_id": participant.model_config_id,
+                        "participant_id": participant.id,
                         "nickname": participant.nickname
                     }
 
                     try:
-                        model_config_id, chunks, error = future.result(timeout=timeout_per_model)
+                        participant_id, chunks, error = future.result(timeout=timeout_per_model)
 
                         if error:
                             yield {
                                 "type": "content",
-                                "model_config_id": model_config_id,
+                                "participant_id": participant_id,
                                 "text": f"错误: {error}"
                             }
                         else:
                             try:
-                                content = self._process_model_chunks(model_config_id, chunks, participant)
+                                content = self._process_model_chunks(participant_id, chunks, participant)
                                 yield {
                                     "type": "model_response_complete",
-                                    "model_config_id": model_config_id,
+                                    "participant_id": participant_id,
                                     "content": content
                                 }
                             except Exception as e:
@@ -536,14 +515,14 @@ class GroupChatManager:
                                 })
                                 yield {
                                     "type": "content",
-                                    "model_config_id": participant.model_config_id,
+                                    "participant_id": participant.id,
                                     "text": f"处理响应失败: {str(e)}"
                                 }
                     except concurrent.futures.TimeoutError:
                         logger.warning("模型调用超时", extra={"model": participant.nickname})
                         yield {
                             "type": "content",
-                            "model_config_id": participant.model_config_id,
+                            "participant_id": participant.id,
                             "text": f"错误: 模型响应超时 ({timeout_per_model}秒)"
                         }
                     except Exception as e:
@@ -553,13 +532,13 @@ class GroupChatManager:
                         })
                         yield {
                             "type": "content",
-                            "model_config_id": participant.model_config_id,
+                            "participant_id": participant.id,
                             "text": f"错误: {str(e)}"
                         }
 
                     yield {
                         "type": "model_response_end",
-                        "model_config_id": participant.model_config_id,
+                        "participant_id": participant.id,
                         "nickname": participant.nickname
                     }
 
@@ -577,17 +556,16 @@ class GroupChatManager:
         round_num: int
     ) -> Generator[Dict[str, Any], None, None]:
         """串行调用多个模型（用于讨论阶段）"""
-        session_id = self._current_session_id
-        all_participants = self.get_participants(session_id)
+        all_participants = self.get_participants()
 
         for participant in participants:
-            model_instance = self._session_models[session_id].get(participant.model_config_id)
+            model_instance = self._ensure_model_instance(participant)
             if not model_instance:
                 continue
 
             yield {
                 "type": "model_response_start",
-                "model_config_id": participant.model_config_id,
+                "participant_id": participant.id,
                 "nickname": participant.nickname
             }
 
@@ -599,10 +577,10 @@ class GroupChatManager:
 
             try:
                 chunks = list(model_instance.model.stream(messages))
-                content = self._process_model_chunks(participant.model_config_id, chunks, participant, round_num)
+                content = self._process_model_chunks(participant.id, chunks, participant, round_num)
                 yield {
                     "type": "model_response_complete",
-                    "model_config_id": participant.model_config_id,
+                    "participant_id": participant.id,
                     "content": content
                 }
             except Exception as e:
@@ -612,19 +590,19 @@ class GroupChatManager:
                 })
                 yield {
                     "type": "content",
-                    "model_config_id": participant.model_config_id,
+                    "participant_id": participant.id,
                     "text": f"错误: {e}"
                 }
 
             yield {
                 "type": "model_response_end",
-                "model_config_id": participant.model_config_id,
+                "participant_id": participant.id,
                 "nickname": participant.nickname
             }
 
     def _process_model_chunks(
         self,
-        model_config_id: int,
+        participant_id: int,
         chunks: List,
         participant: GroupChatParticipant,
         round_num: int = None
@@ -670,7 +648,7 @@ class GroupChatManager:
         msg = GroupChatMessage(
             session_id=session_id,
             role="assistant",
-            model_config_id=model_config_id,
+            participant_id=participant_id,
             content=content,
             discussion_round=round_num
         )

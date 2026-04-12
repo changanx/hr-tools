@@ -73,13 +73,12 @@ class GroupChatSessionRepository:
 
 
 class GroupChatParticipantRepository:
-    """群聊参与者仓库"""
+    """群聊参与者仓库（全局配置）"""
 
-    def find_by_session(self, session_id: int) -> List[GroupChatParticipant]:
-        """获取会话的所有参与者"""
+    def find_all(self) -> List[GroupChatParticipant]:
+        """获取所有参与者"""
         cursor = persistent_db.connection.execute(
-            "SELECT * FROM group_chat_participant WHERE session_id = ? ORDER BY joined_at ASC",
-            (session_id,)
+            "SELECT * FROM group_chat_participant ORDER BY created_at ASC"
         )
         return [GroupChatParticipant.from_row(row) for row in cursor.fetchall()]
 
@@ -91,11 +90,11 @@ class GroupChatParticipantRepository:
         row = cursor.fetchone()
         return GroupChatParticipant.from_row(row) if row else None
 
-    def find_by_session_and_model(self, session_id: int, model_config_id: int) -> Optional[GroupChatParticipant]:
-        """根据会话和模型查找参与者"""
+    def find_by_model_config(self, model_config_id: int) -> Optional[GroupChatParticipant]:
+        """根据模型配置查找参与者"""
         cursor = persistent_db.connection.execute(
-            "SELECT * FROM group_chat_participant WHERE session_id = ? AND model_config_id = ?",
-            (session_id, model_config_id)
+            "SELECT * FROM group_chat_participant WHERE model_config_id = ?",
+            (model_config_id,)
         )
         row = cursor.fetchone()
         return GroupChatParticipant.from_row(row) if row else None
@@ -105,18 +104,12 @@ class GroupChatParticipantRepository:
         if participant.id is None:
             cursor = persistent_db.connection.execute(
                 """
-                INSERT INTO group_chat_participant (session_id, model_config_id, nickname, role_description)
-                VALUES (?, ?, ?, ?)
+                INSERT INTO group_chat_participant (model_config_id, nickname, role_description)
+                VALUES (?, ?, ?)
                 """,
-                (participant.session_id, participant.model_config_id,
-                 participant.nickname, participant.role_description)
+                (participant.model_config_id, participant.nickname, participant.role_description)
             )
             participant.id = cursor.lastrowid
-            # 更新会话时间
-            persistent_db.connection.execute(
-                "UPDATE group_chat_session SET updated_at=CURRENT_TIMESTAMP WHERE id=?",
-                (participant.session_id,)
-            )
         else:
             persistent_db.connection.execute(
                 """
@@ -136,19 +129,9 @@ class GroupChatParticipantRepository:
         persistent_db.connection.commit()
         return cursor.rowcount > 0
 
-    def delete_by_session(self, session_id: int) -> int:
-        """删除会话的所有参与者"""
-        cursor = persistent_db.connection.execute(
-            "DELETE FROM group_chat_participant WHERE session_id = ?", (session_id,)
-        )
-        persistent_db.connection.commit()
-        return cursor.rowcount
-
-    def count_by_session(self, session_id: int) -> int:
-        """统计会话参与者数量"""
-        cursor = persistent_db.connection.execute(
-            "SELECT COUNT(*) FROM group_chat_participant WHERE session_id = ?", (session_id,)
-        )
+    def count(self) -> int:
+        """统计参与者数量"""
+        cursor = persistent_db.connection.execute("SELECT COUNT(*) FROM group_chat_participant")
         return cursor.fetchone()[0]
 
 
@@ -199,11 +182,11 @@ class GroupChatMessageRepository:
 
         cursor = persistent_db.connection.execute(
             """
-            INSERT INTO group_chat_message (session_id, role, model_config_id, content,
+            INSERT INTO group_chat_message (session_id, role, participant_id, content,
                 mentioned_models, discussion_round)
             VALUES (?, ?, ?, ?, ?, ?)
             """,
-            (message.session_id, message.role, message.model_config_id,
+            (message.session_id, message.role, message.participant_id,
              message.content, mentioned_models_json, message.discussion_round)
         )
         message.id = cursor.lastrowid

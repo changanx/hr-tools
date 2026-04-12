@@ -33,16 +33,16 @@ class GroupChatWorker(QThread):
     finished = Signal()
     error = Signal(str)
 
-    def __init__(self, user_message: str, mentioned_model_ids: List[int] = None, parent=None):
+    def __init__(self, user_message: str, mentioned_participant_ids: List[int] = None, parent=None):
         super().__init__(parent)
         self._user_message = user_message
-        self._mentioned_model_ids = mentioned_model_ids
+        self._mentioned_participant_ids = mentioned_participant_ids
         self._is_stopped = False
 
     def run(self):
         """执行群聊"""
         try:
-            for chunk in group_chat_manager.chat(self._user_message, self._mentioned_model_ids):
+            for chunk in group_chat_manager.chat(self._user_message, self._mentioned_participant_ids):
                 if self._is_stopped:
                     break
                 chunk_type = chunk.get("type", "content")
@@ -65,12 +65,14 @@ class GroupChatInterface(ScrollArea):
         self._model_config_repo = AIModelConfigRepository()
         self._current_session: Optional[GroupChatSession] = None
         self._worker: Optional[GroupChatWorker] = None
-        self._current_model_id: Optional[int] = None  # 当前正在响应的模型
-        self._model_widgets: Dict[int, GroupChatMessageWidget] = {}  # model_id -> widget
-        self._mentioned_models: Set[int] = set()  # @ 提及的模型
+        self._current_participant_id: Optional[int] = None  # 当前正在响应的参与者
+        self._participant_widgets: Dict[int, GroupChatMessageWidget] = {}  # participant_id -> widget
+        self._mentioned_participants: Set[int] = set()  # @ 提及的参与者
+        self._sessions: List[GroupChatSession] = []
 
         self._initUI()
-        self._newSession()
+        self._loadSessions()
+        self._refreshParticipantsUI()
         logger.info("群聊界面初始化完成")
 
     def _initUI(self):
@@ -82,6 +84,11 @@ class GroupChatInterface(ScrollArea):
         toolbarLayout = QHBoxLayout()
 
         self.titleLabel = TitleLabel("群聊", self)
+
+        # 会话历史选择
+        self.sessionCombo = ComboBox(self)
+        self.sessionCombo.setFixedWidth(150)
+        self.sessionCombo.currentIndexChanged.connect(self._onSessionChanged)
 
         # 最大轮次
         self.roundsLabel = BodyLabel("最大轮次:", self)
@@ -109,6 +116,7 @@ class GroupChatInterface(ScrollArea):
         self.clearBtn.clicked.connect(self._clearMessages)
 
         toolbarLayout.addWidget(self.titleLabel)
+        toolbarLayout.addWidget(self.sessionCombo)
         toolbarLayout.addStretch()
         toolbarLayout.addWidget(self.roundsLabel)
         toolbarLayout.addWidget(self.roundsSpin)
@@ -285,6 +293,63 @@ class GroupChatInterface(ScrollArea):
             repo = GroupChatSessionRepository()
             repo.save(self._current_session)
 
+    def _loadSessions(self):
+        """加载会话历史"""
+        self._sessions = group_chat_manager.get_all_sessions()
+        self.sessionCombo.blockSignals(True)
+        self.sessionCombo.clear()
+
+        if not self._sessions:
+            # 没有会话，创建新的
+            self._newSession()
+            return
+
+        for session in self._sessions:
+            self.sessionCombo.addItem(session.title)
+
+        # 选择最新的会话
+        self.sessionCombo.setCurrentIndex(0)
+        self.sessionCombo.blockSignals(False)
+        self._switchToSession(self._sessions[0].id)
+
+    def _onSessionChanged(self, index: int):
+        """会话切换"""
+        if index < 0 or index >= len(self._sessions):
+            return
+        self._switchToSession(self._sessions[index].id)
+
+    def _switchToSession(self, session_id: int):
+        """切换到指定会话"""
+        group_chat_manager.set_current_session(session_id)
+        self._current_session = group_chat_manager.get_session(session_id)
+
+        # 更新轮次选择
+        if self._current_session:
+            self.roundsSpin.setCurrentIndex(self._current_session.max_discussion_rounds - 1)
+
+        # 加载历史消息
+        self._loadHistoryMessages()
+        # 刷新参与者 UI（参与者是全局的，不需要切换）
+        self._refreshParticipantsUI()
+
+    def _loadHistoryMessages(self):
+        """加载历史消息"""
+        self._clearMessages(keep_db=True)
+
+        if not self._current_session:
+            return
+
+        messages = group_chat_manager.get_messages(self._current_session.id)
+        participants = {p.id: p for p in group_chat_manager.get_participants()}
+
+        for msg in messages:
+            if msg.role == "user":
+                self._addMessage("user", msg.content)
+            elif msg.role == "assistant":
+                participant = participants.get(msg.participant_id)
+                if participant:
+                    self._addMessage("assistant", msg.content, {"id": participant.id, "nickname": participant.nickname})
+
     def _newSession(self):
         """新建群聊会话"""
         max_rounds = int(self.roundsSpin.currentText())
@@ -293,23 +358,31 @@ class GroupChatInterface(ScrollArea):
             max_rounds=max_rounds
         )
         group_chat_manager.set_current_session(self._current_session.id)
+
+        # 刷新会话列表
+        self._sessions.insert(0, self._current_session)
+        self.sessionCombo.blockSignals(True)
+        self.sessionCombo.insertItem(0, self._current_session.title)
+        self.sessionCombo.setCurrentIndex(0)
+        self.sessionCombo.blockSignals(False)
+
         self._clearMessages()
         self._refreshParticipantsUI()
 
-    def _clearMessages(self):
+    def _clearMessages(self, keep_db: bool = False):
         """清空消息"""
         for widget in self._message_widgets:
             widget.deleteLater()
         self._message_widgets.clear()
-        self._model_widgets.clear()
+        self._participant_widgets.clear()
         self.emptyLabel.show()
         self._empty_shown = True
 
-        if self._current_session:
+        if self._current_session and not keep_db:
             group_chat_manager.clear_messages(self._current_session.id)
 
     def _refreshParticipantsUI(self):
-        """刷新参与者 UI"""
+        """刷新参与者 UI（全局参与者）"""
         # 清空现有
         while self.participantsLayout.count() > 1:
             item = self.participantsLayout.takeAt(0)
@@ -322,11 +395,7 @@ class GroupChatInterface(ScrollArea):
                 item.widget().deleteLater()
 
         self._mention_checkboxes = {}
-
-        if not self._current_session:
-            return
-
-        participants = group_chat_manager.get_participants(self._current_session.id)
+        participants = group_chat_manager.get_participants()
 
         for p in participants:
             # 参与者卡片
@@ -336,8 +405,8 @@ class GroupChatInterface(ScrollArea):
             # @ 提及复选框
             cb = QCheckBox(p.nickname, self)
             cb.setStyleSheet("color: #1976d2;")
-            cb.stateChanged.connect(lambda state, pid=p.model_config_id: self._onMentionChanged(pid, state))
-            self._mention_checkboxes[p.model_config_id] = cb
+            cb.stateChanged.connect(lambda state, pid=p.id: self._onMentionChanged(pid, state))
+            self._mention_checkboxes[p.id] = cb
             self.mentionWidgetLayout.insertWidget(self.mentionWidgetLayout.count() - 1, cb)
 
     def _createParticipantCard(self, participant: GroupChatParticipant) -> QWidget:
@@ -391,15 +460,11 @@ class GroupChatInterface(ScrollArea):
         return card
 
     def _addParticipant(self):
-        """添加参与者"""
-        if not self._current_session:
-            return
-
-        dialog = ParticipantEditDialog(self, session_id=self._current_session.id)
+        """添加参与者（全局）"""
+        dialog = ParticipantEditDialog(self)
         if dialog.exec():
             data = dialog.get_data()
             participant = group_chat_manager.add_participant(
-                session_id=self._current_session.id,
                 model_config_id=data["model_config_id"],
                 nickname=data["nickname"],
                 role_description=data["role_description"]
@@ -414,11 +479,7 @@ class GroupChatInterface(ScrollArea):
 
     def _editParticipant(self, participant_id: int):
         """编辑参与者"""
-        participant = None
-        for p in group_chat_manager.get_participants(self._current_session.id):
-            if p.id == participant_id:
-                participant = p
-                break
+        participant = group_chat_manager.get_participant(participant_id)
 
         if not participant:
             return
@@ -439,12 +500,12 @@ class GroupChatInterface(ScrollArea):
         if group_chat_manager.remove_participant(participant_id):
             self._refreshParticipantsUI()
 
-    def _onMentionChanged(self, model_id: int, state: int):
+    def _onMentionChanged(self, participant_id: int, state: int):
         """@ 提及变化"""
         if state == Qt.Checked:
-            self._mentioned_models.add(model_id)
+            self._mentioned_participants.add(participant_id)
         else:
-            self._mentioned_models.discard(model_id)
+            self._mentioned_participants.discard(participant_id)
 
     def _selectAllMentions(self):
         """全选提及"""
@@ -454,7 +515,7 @@ class GroupChatInterface(ScrollArea):
     def _clearMentions(self):
         """清除提及"""
         # 先清空集合，再更新复选框（避免触发 _onMentionChanged 再次修改集合）
-        self._mentioned_models.clear()
+        self._mentioned_participants.clear()
         for cb in self._mention_checkboxes.values():
             cb.blockSignals(True)  # 阻塞信号
             cb.setChecked(False)
@@ -485,7 +546,7 @@ class GroupChatInterface(ScrollArea):
         if not content:
             return
 
-        participants = group_chat_manager.get_participants(self._current_session.id)
+        participants = group_chat_manager.get_participants()
         if not participants:
             InfoBar.warning(
                 title="提示",
@@ -495,7 +556,7 @@ class GroupChatInterface(ScrollArea):
             return
 
         # 解析 @ 提及
-        mentioned_ids = list(self._mentioned_models) if self._mentioned_models else None
+        mentioned_ids = list(self._mentioned_participants) if self._mentioned_participants else None
 
         # 添加用户消息
         self._addMessage("user", content)
@@ -513,7 +574,7 @@ class GroupChatInterface(ScrollArea):
         self.sendBtn.setVisible(False)
         self.stopBtn.setVisible(True)
         self.inputEdit.setEnabled(False)
-        self._model_widgets.clear()
+        self._participant_widgets.clear()
 
         self._worker.start()
 
@@ -523,28 +584,41 @@ class GroupChatInterface(ScrollArea):
         try:
             chunk = json.loads(data)
         except json.JSONDecodeError:
+            logger.warning(f"群聊消息解析失败: {data[:100]}")
             return
 
+        logger.debug(f"群聊收到消息: type={msg_type}, chunk={chunk}")
+
         if msg_type == "model_response_start":
-            model_id = chunk.get("model_config_id")
+            participant_id = chunk.get("participant_id")
             nickname = chunk.get("nickname", "AI")
 
             # 创建新的消息 widget
-            widget = self._addMessage("assistant", "", {"id": model_id, "nickname": nickname})
-            self._model_widgets[model_id] = widget
-            self._current_model_id = model_id
+            widget = self._addMessage("assistant", "", {"id": participant_id, "nickname": nickname})
+            self._participant_widgets[participant_id] = widget
+            self._current_participant_id = participant_id
 
         elif msg_type == "content":
-            model_id = chunk.get("model_config_id", self._current_model_id)
+            participant_id = chunk.get("participant_id", self._current_participant_id)
             text = chunk.get("text", "")
-            if model_id in self._model_widgets:
-                self._model_widgets[model_id].appendContent(text)
+            logger.debug(f"content消息: participant_id={participant_id}, text={text[:50] if text else 'empty'}")
+            if participant_id in self._participant_widgets:
+                self._participant_widgets[participant_id].appendContent(text)
+            else:
+                logger.warning(f"未找到 participant_id={participant_id} 的 widget")
+
+        elif msg_type == "model_response_complete":
+            # 模型响应完成，设置完整内容
+            participant_id = chunk.get("participant_id")
+            content = chunk.get("content", "")
+            if participant_id in self._participant_widgets:
+                self._participant_widgets[participant_id].setContent(content)
 
         elif msg_type == "thinking":
-            model_id = chunk.get("model_config_id", self._current_model_id)
+            participant_id = chunk.get("participant_id", self._current_participant_id)
             text = chunk.get("text", "")
-            if model_id in self._model_widgets:
-                self._model_widgets[model_id].appendThinking(text)
+            if participant_id in self._participant_widgets:
+                self._participant_widgets[participant_id].appendThinking(text)
 
         elif msg_type == "round_start":
             round_num = chunk.get("round", 0)
@@ -585,4 +659,4 @@ class GroupChatInterface(ScrollArea):
         self.stopBtn.setVisible(False)
         self.inputEdit.setEnabled(True)
         self._worker = None
-        self._current_model_id = None
+        self._current_participant_id = None

@@ -15,17 +15,26 @@ def setup_test_storage():
     测试会话开始时设置测试存储路径
     使用临时目录，避免污染用户数据
     """
-    from app.common.storage_config import storage_config_manager
+    from app.common.storage_config import storage_config_manager, StorageConfig
     import tempfile
+
+    # 保存原始配置
+    original_config = storage_config_manager.get_config()
+    original_data_dir = original_config.data_dir
 
     # 使用临时目录作为测试数据存储
     test_data_dir = tempfile.mkdtemp(prefix="hr-tools-test-")
-    storage_config_manager.set_data_dir(test_data_dir)
+
+    # 直接修改内存中的配置，不持久化到文件
+    storage_config_manager._config = StorageConfig(data_dir=test_data_dir)
 
     yield
 
-    # 测试结束后清理
+    # 测试结束后清理临时目录
     shutil.rmtree(test_data_dir, ignore_errors=True)
+
+    # 恢复原始配置
+    storage_config_manager._config = StorageConfig(data_dir=original_data_dir)
 
 
 @pytest.fixture(autouse=True)

@@ -2,8 +2,9 @@
 存储配置管理模块
 """
 import json
+import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 from dataclasses import dataclass, asdict
 
 from PySide6.QtCore import QObject, Signal
@@ -32,7 +33,7 @@ class StorageConfig:
         """获取有效的数据目录"""
         if self.data_dir:
             return Path(self.data_dir)
-        return Path.home() / ".hr-tools" / "data"
+        return Path("C:/ProgramData/xo1997-pyside-gallery/db")
 
 
 class StorageConfigManager(QObject):
@@ -100,6 +101,67 @@ class StorageConfigManager(QObject):
         data_dir = self._config.effective_data_dir
         data_dir.mkdir(parents=True, exist_ok=True)
         return data_dir
+
+    def has_data_to_migrate(self, path: Path) -> bool:
+        """
+        检查指定路径是否有可迁移的数据
+
+        Args:
+            path: 数据目录路径
+
+        Returns:
+            是否存在数据库文件
+        """
+        db_file = path / "hr-tools.db"
+        return db_file.exists() and db_file.stat().st_size > 0
+
+    def migrate_data(
+        self,
+        old_path: Path,
+        new_path: Path,
+        delete_old: bool = False
+    ) -> Tuple[bool, str]:
+        """
+        迁移数据到新位置
+
+        Args:
+            old_path: 旧数据目录
+            new_path: 新数据目录
+            delete_old: 是否删除旧数据
+
+        Returns:
+            (成功与否, 消息)
+        """
+        old_db = old_path / "hr-tools.db"
+        new_db = new_path / "hr-tools.db"
+
+        # 检查旧数据库是否存在
+        if not old_db.exists():
+            return False, "旧数据目录中没有数据库文件"
+
+        try:
+            # 确保新目录存在
+            new_path.mkdir(parents=True, exist_ok=True)
+
+            # 检查新位置是否已有数据库
+            if new_db.exists():
+                # 备份现有数据库
+                backup_path = new_db.with_suffix(".db.bak")
+                if backup_path.exists():
+                    backup_path.unlink()
+                shutil.copy2(new_db, backup_path)
+
+            # 复制数据库文件
+            shutil.copy2(old_db, new_db)
+
+            # 如果需要删除旧数据
+            if delete_old:
+                old_db.unlink()
+
+            return True, "数据迁移成功"
+
+        except Exception as e:
+            return False, f"迁移失败: {str(e)}"
 
 
 # 全局存储配置管理器实例

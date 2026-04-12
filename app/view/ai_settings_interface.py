@@ -455,7 +455,8 @@ class AISettingsInterface(ScrollArea):
 
     def _onChangeDataPath(self):
         """更改数据存储位置"""
-        from PySide6.QtWidgets import QFileDialog
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        from pathlib import Path
 
         current_dir = storage_config_manager.get_config().effective_data_dir
         new_dir = QFileDialog.getExistingDirectory(
@@ -464,7 +465,82 @@ class AISettingsInterface(ScrollArea):
             str(current_dir),
         )
 
-        if new_dir:
+        if not new_dir:
+            return
+
+        new_path = Path(new_dir)
+        old_path = current_dir
+
+        # 检查是否是相同路径
+        if new_path.resolve() == old_path.resolve():
+            InfoBar.warning(
+                title="未更改",
+                content="选择了相同的目录",
+                parent=self,
+                duration=3000
+            )
+            return
+
+        # 检查旧位置是否有数据需要迁移
+        if storage_config_manager.has_data_to_migrate(old_path):
+            # 弹出迁移选项对话框
+            msg = QMessageBox(self)
+            msg.setWindowTitle("数据迁移")
+            msg.setText("检测到当前数据目录中有数据，是否迁移到新位置？")
+            msg.setInformativeText(
+                f"旧位置: {old_path}\n"
+                f"新位置: {new_path}\n\n"
+                "选择「迁移」将复制数据到新位置\n"
+                "选择「不迁移」将在新位置创建空数据库"
+            )
+            msg.setIcon(QMessageBox.Question)
+
+            migrate_btn = msg.addButton("迁移数据", QMessageBox.AcceptRole)
+            migrate_delete_btn = msg.addButton("迁移并删除旧数据", QMessageBox.ActionRole)
+            no_migrate_btn = msg.addButton("不迁移", QMessageBox.RejectRole)
+            cancel_btn = msg.addButton(QMessageBox.Cancel)
+
+            msg.exec()
+
+            clicked = msg.clickedButton()
+
+            if clicked == cancel_btn:
+                return
+
+            if clicked == migrate_btn or clicked == migrate_delete_btn:
+                delete_old = (clicked == migrate_delete_btn)
+                success, message = storage_config_manager.migrate_data(
+                    old_path, new_path, delete_old=delete_old
+                )
+
+                if success:
+                    storage_config_manager.set_data_dir(new_dir)
+                    self.dataPathLabel.setText(new_dir)
+                    InfoBar.success(
+                        title="迁移成功",
+                        content=f"{message}\n请重启应用以生效",
+                        parent=self,
+                        duration=5000
+                    )
+                else:
+                    InfoBar.error(
+                        title="迁移失败",
+                        content=message,
+                        parent=self,
+                        duration=5000
+                    )
+            else:
+                # 不迁移
+                storage_config_manager.set_data_dir(new_dir)
+                self.dataPathLabel.setText(new_dir)
+                InfoBar.success(
+                    title="已更新",
+                    content=f"数据存储位置已更改\n将在新位置创建空数据库\n请重启应用以生效",
+                    parent=self,
+                    duration=5000
+                )
+        else:
+            # 没有数据需要迁移
             storage_config_manager.set_data_dir(new_dir)
             self.dataPathLabel.setText(new_dir)
             InfoBar.success(

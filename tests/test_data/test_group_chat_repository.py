@@ -41,17 +41,15 @@ class TestGroupChatSessionModel:
 
 
 class TestGroupChatParticipantModel:
-    """群聊参与者模型测试"""
+    """群聊参与者模型测试（全局配置）"""
 
     def test_create_participant(self):
         """测试创建参与者"""
         participant = GroupChatParticipant(
-            session_id=1,
             model_config_id=1,
             nickname="@gpt-4",
             role_description="代码审查专家"
         )
-        assert participant.session_id == 1
         assert participant.model_config_id == 1
         assert participant.nickname == "@gpt-4"
         assert participant.role_description == "代码审查专家"
@@ -60,7 +58,6 @@ class TestGroupChatParticipantModel:
         """测试参与者转字典"""
         participant = GroupChatParticipant(
             id=1,
-            session_id=1,
             model_config_id=2,
             nickname="@claude",
             role_description="架构分析师"
@@ -94,7 +91,7 @@ class TestGroupChatMessageModel:
             id=1,
             session_id=1,
             role="assistant",
-            model_config_id=1,
+            participant_id=1,
             content="回复内容",
             mentioned_models=[],
             discussion_round=1
@@ -102,7 +99,7 @@ class TestGroupChatMessageModel:
         d = message.to_dict()
         assert d['id'] == 1
         assert d['role'] == "assistant"
-        assert d['model_config_id'] == 1
+        assert d['participant_id'] == 1
 
 
 class TestGroupChatSessionRepository:
@@ -161,16 +158,10 @@ class TestGroupChatSessionRepository:
 
 
 class TestGroupChatParticipantRepository:
-    """群聊参与者仓库测试"""
+    """群聊参与者仓库测试（全局配置）"""
 
     def setup_method(self):
-        """每个测试前创建测试会话和模型配置"""
-        # 数据清理由 conftest.py 的 clean_persistent_db fixture 自动处理
-
-        # 创建会话
-        self.session_repo = GroupChatSessionRepository()
-        self.session = self.session_repo.save(GroupChatSession(title="测试群聊"))
-
+        """每个测试前创建模型配置"""
         # 创建模型配置
         self.config_repo = AIModelConfigRepository()
         self.config = self.config_repo.save(AIModelConfig(
@@ -187,7 +178,6 @@ class TestGroupChatParticipantRepository:
         repo = GroupChatParticipantRepository()
 
         participant = repo.save(GroupChatParticipant(
-            session_id=self.session.id,
             model_config_id=self.config.id,
             nickname="@gpt-4",
             role_description="代码审查专家"
@@ -195,45 +185,54 @@ class TestGroupChatParticipantRepository:
 
         assert participant.id is not None
 
-    def test_find_by_session(self):
-        """测试查找会话的参与者"""
+    def test_find_all(self):
+        """测试获取所有参与者"""
         repo = GroupChatParticipantRepository()
 
         repo.save(GroupChatParticipant(
-            session_id=self.session.id,
             model_config_id=self.config.id,
             nickname="@gpt-4"
         ))
 
-        participants = repo.find_by_session(self.session.id)
+        participants = repo.find_all()
         assert len(participants) == 1
         assert participants[0].nickname == "@gpt-4"
+
+    def test_find_by_model_config(self):
+        """测试根据模型配置查找"""
+        repo = GroupChatParticipantRepository()
+
+        repo.save(GroupChatParticipant(
+            model_config_id=self.config.id,
+            nickname="@gpt-4"
+        ))
+
+        found = repo.find_by_model_config(self.config.id)
+        assert found is not None
+        assert found.nickname == "@gpt-4"
 
     def test_delete_participant(self):
         """测试删除参与者"""
         repo = GroupChatParticipantRepository()
 
         participant = repo.save(GroupChatParticipant(
-            session_id=self.session.id,
             model_config_id=self.config.id,
             nickname="@gpt-4"
         ))
 
         assert repo.delete(participant.id)
-        assert len(repo.find_by_session(self.session.id)) == 0
+        assert repo.find_by_id(participant.id) is None
 
 
 class TestGroupChatMessageRepository:
     """群聊消息仓库测试"""
 
     def setup_method(self):
-        """每个测试前创建测试会话和模型配置"""
-        # 数据清理由 conftest.py 的 clean_persistent_db fixture 自动处理
-
+        """每个测试前创建测试会话和参与者"""
         self.session_repo = GroupChatSessionRepository()
         self.session = self.session_repo.save(GroupChatSession(title="测试群聊"))
 
-        # 创建模型配置（用于 assistant 消息）
+        # 创建模型配置和参与者
         self.config_repo = AIModelConfigRepository()
         self.config = self.config_repo.save(AIModelConfig(
             name="GPT-4",
@@ -242,6 +241,12 @@ class TestGroupChatMessageRepository:
             api_key="test-key",
             is_default=True,
             is_enabled=True
+        ))
+
+        self.participant_repo = GroupChatParticipantRepository()
+        self.participant = self.participant_repo.save(GroupChatParticipant(
+            model_config_id=self.config.id,
+            nickname="@gpt-4"
         ))
 
     def test_save_message(self):
@@ -268,7 +273,7 @@ class TestGroupChatMessageRepository:
         repo.save(GroupChatMessage(
             session_id=self.session.id,
             role="assistant",
-            model_config_id=self.config.id,
+            participant_id=self.participant.id,
             content="AI 回复"
         ))
 
@@ -288,7 +293,7 @@ class TestGroupChatMessageRepository:
         repo.save(GroupChatMessage(
             session_id=self.session.id,
             role="assistant",
-            model_config_id=self.config.id,
+            participant_id=self.participant.id,
             content="消息2",
             discussion_round=1
         ))

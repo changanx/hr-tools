@@ -210,35 +210,103 @@ class PersistentDatabase:
                 updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
 
+            -- 全局参与者配置（不绑定会话）
             CREATE TABLE IF NOT EXISTS group_chat_participant (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                session_id INTEGER NOT NULL,
                 model_config_id INTEGER NOT NULL,
-                nickname TEXT,
+                nickname TEXT NOT NULL,
                 role_description TEXT,
-                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (session_id) REFERENCES group_chat_session(id) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (model_config_id) REFERENCES ai_model_config(id)
             );
 
+            -- 群聊消息（引用全局参与者）
             CREATE TABLE IF NOT EXISTS group_chat_message (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 session_id INTEGER NOT NULL,
                 role TEXT NOT NULL,
-                model_config_id INTEGER,
+                participant_id INTEGER,
                 content TEXT NOT NULL,
                 mentioned_models TEXT,
                 discussion_round INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (session_id) REFERENCES group_chat_session(id) ON DELETE CASCADE,
-                FOREIGN KEY (model_config_id) REFERENCES ai_model_config(id)
+                FOREIGN KEY (participant_id) REFERENCES group_chat_participant(id)
             );
 
             CREATE INDEX IF NOT EXISTS idx_chat_message_session ON chat_message(session_id);
-            CREATE INDEX IF NOT EXISTS idx_group_chat_participant_session ON group_chat_participant(session_id);
             CREATE INDEX IF NOT EXISTS idx_group_chat_message_session ON group_chat_message(session_id);
         """)
         conn.commit()
+
+        # 执行数据迁移
+        self._migrate_group_chat_schema(conn)
+
+    def _migrate_group_chat_schema(self, conn: sqlite3.Connection):
+        """迁移群聊相关的数据库结构"""
+        # 检查是否需要迁移（group_chat_participant 是否有 session_id 列）
+        cursor = conn.execute("PRAGMA table_info(group_chat_participant)")
+        columns = [row[1] for row in cursor.fetchall()]
+
+        if 'session_id' in columns:
+            logger.info("迁移群聊数据库结构：参与者改为全局配置")
+
+            # 1. 备份旧数据
+            old_participants = conn.execute(
+                "SELECT DISTINCT model_config_id, nickname, role_description FROM group_chat_participant"
+            ).fetchall()
+
+            old_messages = conn.execute(
+                "SELECT id, session_id, role, model_config_id, content, mentioned_models, discussion_round, created_at FROM group_chat_message"
+            ).fetchall()
+
+            # 2. 删除旧表
+            conn.execute("DROP TABLE IF EXISTS group_chat_message")
+            conn.execute("DROP TABLE IF EXISTS group_chat_participant")
+
+            conn.commit()
+
+            # 3. 创建新表
+            conn.executescript("""
+                CREATE TABLE group_chat_participant (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    model_config_id INTEGER NOT NULL,
+                    nickname TEXT NOT NULL,
+                    role_description TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (model_config_id) REFERENCES ai_model_config(id)
+                );
+
+                CREATE TABLE group_chat_message (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    session_id INTEGER NOT NULL,
+                    role TEXT NOT NULL,
+                    participant_id INTEGER,
+                    content TEXT NOT NULL,
+                    mentioned_models TEXT,
+                    discussion_round INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (session_id) REFERENCES group_chat_session(id) ON DELETE CASCADE,
+                    FOREIGN KEY (participant_id) REFERENCES group_chat_participant(id)
+                );
+
+                CREATE INDEX idx_group_chat_message_session ON group_chat_message(session_id);
+            """)
+            conn.commit()
+
+            # 4. 迁移参与者数据（去重）
+            for model_config_id, nickname, role_description in old_participants:
+                if model_config_id and nickname:
+                    conn.execute(
+                        "INSERT INTO group_chat_participant (model_config_id, nickname, role_description) VALUES (?, ?, ?)",
+                        (model_config_id, nickname, role_description or "")
+                    )
+
+            conn.commit()
+            logger.info(f"迁移完成：已迁移 {len(old_participants)} 个参与者配置")
+
+            # 注意：消息历史由于 participant_id 无法精确匹配，暂时不迁移
+            # 用户可以查看新的参与者配置重新开始对话
 
     @contextmanager
     def transaction(self):
