@@ -24,3 +24,7 @@ htmlcov/
 .coverage
 .coverage.*
 
+# Environment variables (contains secrets)
+.env
+*.local
+

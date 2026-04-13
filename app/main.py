@@ -6,6 +6,11 @@ import os
 import ctypes
 from pathlib import Path
 
+from dotenv import load_dotenv
+
+# 加载 .env 文件（在导入其他模块之前）
+load_dotenv()
+
 from PySide6.QtWidgets import QApplication, QMessageBox
 from PySide6.QtCore import Qt
 from PySide6.QtNetwork import QLocalServer, QLocalSocket
