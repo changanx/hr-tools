@@ -28,3 +28,7 @@ htmlcov/
 .env
 *.local
 
+# PyInstaller
+build/
+dist/
+

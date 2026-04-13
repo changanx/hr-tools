@@ -97,6 +97,28 @@ uv run pytest --cov=app --cov=core --cov=data --cov-report=html
 - 测试命名：`test_<模块名>.py`、`Test<类名>`、`test_<功能描述>`
 - 覆盖率要求：数据层 ≥90%、核心层 ≥80%、组件层 ≥85%
 
+## 打包分发
+
+### 打包为可执行文件
+
+```bash
+# 运行打包脚本
+build.bat
+```
+
+输出目录：`dist/xo1997-gallery/`
+
+### 分发给用户
+
+1. 将 `dist/xo1997-gallery/` 文件夹打包发送给用户
+2. 用户首次使用需要创建 `.env` 文件：
+   ```
+   ANTHROPIC_AUTH_TOKEN=your_api_key
+   ANTHROPIC_BASE_URL=https://api.lkeap.cloud.tencent.com/coding/anthropic
+   ANTHROPIC_MODEL=glm-5
+   ```
+3. 双击 `xo1997-gallery.exe` 启动应用
+
 ## 数据存储
 
 - 默认位置：`C:/ProgramData/xo1997-pyside-gallery/db`
